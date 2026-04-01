@@ -3,6 +3,7 @@
 #include <TGraphErrors.h>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <cmath>
 #include <cstdio>      // for sscanf
 #include <algorithm>   // for std::sort
@@ -19,6 +20,8 @@
 #include <TLegend.h>
 #include <TSystem.h>
 #include <TLatex.h>
+#include <TProfile.h>
+#include <TPaveText.h>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -238,7 +241,68 @@ std::vector<int> vAllRawPMT;
 std::vector<int> vAllRawBar;
 
 std::vector<double> vAllGoodLe;
+std::vector<double> vAllGoodECalT;                 // per-hit ECal ADC time aligned with vAllGoodLe/Te
+std::vector<std::vector<double>> vBarGoodLeECalT;        // per-bar per-hit ECal time aligned with vBarGoodLe
+
+// --- ECal-time linear correction: remove correlation t_CDet vs t_ECal, then apply global shift
+double gECalFitP0 = -40.303;    // p0 from fit: <t_CDet> = p0 + p1*t_ECal
+double gECalFitP1 =  0.63615;   // p1 from fit
+double gTargetMeanLE = 30.0;    // desired mean corrected LE (ns)
+double gECalDeltaShift = 0.0;   // computed shift applied after removing correlation
+bool   gUseECalTimeCorr = true; // enable/disable ECal-time correction
 std::vector<std::vector<double>> vBarGoodLe;
+std::vector<TH1F*> hBarGoodLe; // one histogram per bar (PMT group), built in plotAllTDC()
+static const int NumPMTs = NumHalfModules*NumBars; // 168 (does not include 4 ref paddles)
+
+std::vector<double> gBarToffsetCorr;      // size NumPMTs, correction to ADD to LE/TE: (mean_all - mean_bar)
+bool gBarToffsetLoaded = false;           // true if offsets were read from file
+std::string gBarToffsetFile = "CDet_bar_toffsets.dat";
+
+inline double GetBarToffsetCorr(int elID) {
+  const int bar = elID / 16;
+  if (0 <= bar && bar < NumPMTs && (int)gBarToffsetCorr.size() == NumPMTs) return gBarToffsetCorr[bar];
+  return 0.0;
+}
+
+// Reads: bar(1..168)  toffset(ns)  [optional entries]
+// Lines starting with '#' are ignored.
+// Returns true if file opened and at least one bar was read.
+bool LoadBarToffsets(const std::string& fname) {
+  gBarToffsetCorr.assign(NumPMTs, 0.0);
+  gBarToffsetLoaded = false;
+
+  std::ifstream fin(fname.c_str());
+  if (!fin) {
+    std::cout << "[CDet] No offset file '" << fname << "' found; proceeding with zero bar offsets.\n";
+    return false;
+  }
+
+  int nread = 0;
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+    std::istringstream iss(line);
+    int bar1 = -1;
+    double dt = 0.0;
+    double dummyEntries = 0.0;
+    if (!(iss >> bar1 >> dt)) continue;
+    if (bar1 >= 1 && bar1 <= NumPMTs) {
+      gBarToffsetCorr[bar1-1] = dt;
+      nread++;
+    }
+  }
+
+  if (nread > 0) {
+    gBarToffsetLoaded = true;
+    std::cout << "[CDet] Loaded " << nread << " bar offsets from '" << fname << "'.\n";
+    return true;
+  }
+
+  std::cout << "[CDet] Offset file '" << fname << "' contained no readable offsets; using zeros.\n";
+  return false;
+}
+
 std::vector<double> vAllGoodTe;
 std::vector<double> vAllGoodTot;
 std::vector<int> vAllGoodPMT;
@@ -721,12 +785,12 @@ std::vector<T> fill2D(const TTreeReaderArray<T>& arr) {
   return tmp;
 }
 
-void PlotElastic(Int_t RunNumber1=5811, Int_t nevents=50000, Int_t elastic = 0, Int_t minSeg = -1, Int_t maxSeg = -1,
+void PlotElastic_with_barhist_offsets_io_ecalcorr_apply(Int_t RunNumber1=5811, Int_t nevents=50000, Int_t elastic = 0, Int_t minSeg = -1, Int_t maxSeg = -1,
 	Double_t LeMin = 0.02, Double_t LeMax = 60.0,
 	Double_t TotMin = 1.0, Double_t TotMax = 150.0, 
 	Int_t nhitcutlow1 = 1, Int_t nhitcuthigh1 = 100,
 	Int_t nhitcutlow2 = 1, Int_t nhitcuthigh2 = 100,
-	Double_t XDiffCut = 0.1, Double_t XOffset = 0.02, Double_t YOffset = 0.1,
+	Double_t XDiffCut = 0.02, Double_t XOffset = 0.02, Double_t YOffset = 0.1,
         Int_t layer_choice=3,	
 	bool suppress_bad = false,
 	Int_t nruns=30, Int_t maxstream = 2, Int_t firstevent = 1)
@@ -756,6 +820,11 @@ void PlotElastic(Int_t RunNumber1=5811, Int_t nevents=50000, Int_t elastic = 0, 
   TDCBinHigh = LeMax;
   RefTDCBinLow = RefLeMin;
   RefTDCBinHigh = RefLeMax;
+
+
+// Load bar timing offsets if available (applied to CDet LE/TE times).
+// If the file does not exist, offsets default to 0 and the macro will generate it from the data.
+LoadBarToffsets(gBarToffsetFile);
 
   
   // hit channel id
@@ -955,6 +1024,10 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
 
   vCDetPaddleRawTot.assign(2688, std::vector<double>{});
   vCDetPaddleCutTot.assign(2688, std::vector<double>{});
+  // Per-bar storage for good leading-edge times (bar = GoodElID/16)
+  vBarGoodLe.assign(NumPMTs, std::vector<double>{});
+  vBarGoodLeECalT.assign(NumPMTs, std::vector<double>{});
+  vAllGoodECalT.clear();
   //int onlySegment = -1; // set to >=0 to pick just one
 
   AddRunFilesToChain(T, REPLAYED_DIR.Data(), runnum, minSeg, maxSeg);
@@ -1234,9 +1307,9 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
         rawEventCounter++;
         int idx = RawElID[el];
         if (0 <= idx && idx < 2688) {
-          double le_ns = RawElLE[el]*TDC_calib_to_ns - event_ref_tdc;
+          double le_ns = RawElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr(idx);
           double tot_ns = RawElTot[el]*TDC_calib_to_ns;
-          double te_ns = RawElTE[el]*TDC_calib_to_ns - event_ref_tdc;
+          double te_ns = RawElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr(idx);
           rawRate[idx]++;
           vCDetPaddleRawTot[idx].push_back(tot_ns);
           eventHits.push_back({idx, le_ns, tot_ns, te_ns});
@@ -1248,14 +1321,14 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
             //if ((Int_t)RawElID[el] > nTdc) cout << " CDet ID = " << (Int_t)RawElID[el] << "    TDC = " << RawElLE[el]*TDC_calib_to_ns << endl;
             
             //fill this events vectors
-            thisEvent_LE.push_back(RawElLE[el]*TDC_calib_to_ns - event_ref_tdc); 
-            thisEvent_TE.push_back(RawElTE[el]*TDC_calib_to_ns - event_ref_tdc);
+            thisEvent_LE.push_back(RawElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)RawElID[el])); 
+            thisEvent_TE.push_back(RawElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)RawElID[el]));
             thisEvent_TOT.push_back(RawElTot[el]*TDC_calib_to_ns); //- event_ref_tdc);
             thisEvent_ID.push_back((Int_t)RawElID[el]);
           
             //fill all hits vectors
-            vAllRawLe.push_back(RawElLE[el]*TDC_calib_to_ns - event_ref_tdc);
-            vAllRawTe.push_back(RawElTE[el]*TDC_calib_to_ns - event_ref_tdc);
+            vAllRawLe.push_back(RawElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)RawElID[el]));
+            vAllRawTe.push_back(RawElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)RawElID[el]));
             vAllRawTot.push_back(RawElTot[el]*TDC_calib_to_ns);
             vAllRawPMT.push_back(RawElID[el]);
             vAllRawBar.push_back((Int_t)(RawElID[el]/16));
@@ -1494,9 +1567,9 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
         CDetPassedBoolCount++;
         int idx = GoodElID[el];
         if (0 <= idx && idx < 2688) {
-          double le_ns = GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc;
+          double le_ns = GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr(idx);
           double tot_ns = GoodElTot[el]*TDC_calib_to_ns;
-          double te_ns = GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc;
+          double te_ns = GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr(idx);
           goodEventHits.push_back({idx, le_ns, tot_ns, te_ns});
         } //getting rates and tot for pixels
         if ( !check_bad(GoodElID[el], suppress_bad) ) {
@@ -1534,8 +1607,8 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
             (layer_choice == 3 && ngoodhitsc1>=1 && ngoodhitsc2 >= 1) ) {
               eff_numerator++;
 
-              thisEvent_GoodLE.push_back(GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc);
-              thisEvent_GoodTE.push_back(GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc);
+              thisEvent_GoodLE.push_back(GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)GoodElID[el]));
+              thisEvent_GoodTE.push_back(GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)GoodElID[el]));
               thisEvent_GoodTOT.push_back(GoodElTot[el]*TDC_calib_to_ns);
               thisEvent_GoodID.push_back((Int_t)GoodElID[el]);
 
@@ -1543,11 +1616,22 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
               // hGoodTe[(Int_t)GoodElID[el]]->Fill(GoodElTE[el]*TDC_calib_to_ns-event_ref_tdc+60.0);
               // hGoodTot[(Int_t)GoodElID[el]]->Fill(GoodElTot[el]*TDC_calib_to_ns);
 
-              vAllGoodLe.push_back(GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc);
-              vAllGoodTe.push_back(GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc);
+              double t_ECal_event = *ECalAdcTime;
+              double tLE_bar = GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)GoodElID[el]);
+              double tTE_bar = GoodElTE[el]*TDC_calib_to_ns - event_ref_tdc + GetBarToffsetCorr((Int_t)GoodElID[el]);
+              vAllGoodLe.push_back(tLE_bar);
+              vAllGoodTe.push_back(tTE_bar);
               vAllGoodTot.push_back(GoodElTot[el]*TDC_calib_to_ns);
               vAllGoodPMT.push_back(GoodElID[el]);
               vAllGoodBar.push_back((Int_t)(GoodElID[el]/16));
+              vAllGoodECalT.push_back(t_ECal_event);
+              {
+                const int bar = (int)(GoodElID[el] / 16);
+                if (0 <= bar && bar < NumPMTs) {
+                  vBarGoodLe[bar].push_back(tLE_bar);
+                  vBarGoodLeECalT[bar].push_back(t_ECal_event);
+                }
+              }
 
               // hAllGoodLe->Fill(GoodElLE[el]*TDC_calib_to_ns-event_ref_tdc+60.0);
               // hAllGoodTe->Fill(GoodElTE[el]*TDC_calib_to_ns-event_ref_tdc+60.0);
@@ -1864,6 +1948,66 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
 
 
 
+
+  //==================================================== ECal-time correction
+  // Remove linear correlation between CDet time and ECal ADC time:
+  //   <t_CDet> = p0 + p1*t_ECal
+  // Then apply a global shift so that mean(corrected LE) = gTargetMeanLE.
+  if (gUseECalTimeCorr) {
+    double sumResLE = 0.0;
+    long long nResLE = 0;
+
+    const size_t NevCorr = std::min(vGoodLe.size(), v_GoodECalAdcTime.size());
+    for (size_t ev = 0; ev < NevCorr; ++ev) {
+      const double tE = v_GoodECalAdcTime[ev];
+      const size_t Nh = std::min(vGoodLe[ev].size(), vGoodID[ev].size());
+      for (size_t ih = 0; ih < Nh; ++ih) {
+        const int bar = vGoodID[ev][ih] / 16;
+        if (bar < 0 || bar >= NumPMTs) continue;
+        const double tLE = vGoodLe[ev][ih]; // already includes bar offset correction
+        const double res = tLE - (gECalFitP0 + gECalFitP1*tE);
+        sumResLE += res;
+        nResLE++;
+      }
+    }
+
+    const double muResLE = (nResLE > 0) ? (sumResLE / (double)nResLE) : 0.0;
+    gECalDeltaShift = gTargetMeanLE - muResLE;
+
+    std::cout << "[CDet] ECal-time corr enabled. p0=" << gECalFitP0 << " p1=" << gECalFitP1
+              << "  muResLE=" << muResLE << " ns  => delta=" << gECalDeltaShift << " ns\n";
+
+    // --- Apply to ALL stored CDet LE/TE times (good-hit level vectors) ---
+    // Convention: corrected time = (t_barcorr - (p0+p1*tE)) + delta
+    for (size_t i = 0; i < vAllGoodLe.size() && i < vAllGoodECalT.size() && i < vAllGoodBar.size(); ++i) {
+      const int bar = vAllGoodBar[i];
+      if (bar < 0 || bar >= NumPMTs) continue;
+      const double tE = vAllGoodECalT[i];
+      vAllGoodLe[i] = (vAllGoodLe[i] - (gECalFitP0 + gECalFitP1*tE)) + gECalDeltaShift;
+      vAllGoodTe[i] = (vAllGoodTe[i] - (gECalFitP0 + gECalFitP1*tE)) + gECalDeltaShift;
+    }
+
+    // per-bar LE storage used for bar histograms
+    if (vBarGoodLe.size() == (size_t)NumPMTs && vBarGoodLeECalT.size() == (size_t)NumPMTs) {
+      for (int bar = 0; bar < NumPMTs; ++bar) {
+        const size_t Nh = std::min(vBarGoodLe[bar].size(), vBarGoodLeECalT[bar].size());
+        for (size_t j = 0; j < Nh; ++j) {
+          const double tE = vBarGoodLeECalT[bar][j];
+          vBarGoodLe[bar][j] = (vBarGoodLe[bar][j] - (gECalFitP0 + gECalFitP1*tE)) + gECalDeltaShift;
+        }
+      }
+    }
+
+    // event-level good-hit vectors (used by many timing comparison plots)
+    for (size_t ev = 0; ev < NevCorr; ++ev) {
+      const double tE = v_GoodECalAdcTime[ev];
+      const size_t Nh = std::min(vGoodLe[ev].size(), vGoodID[ev].size());
+      for (size_t ih = 0; ih < Nh; ++ih) {
+        vGoodLe[ev][ih] = (vGoodLe[ev][ih] - (gECalFitP0 + gECalFitP1*tE)) + gECalDeltaShift;
+        vGoodTe[ev][ih] = (vGoodTe[ev][ih] - (gECalFitP0 + gECalFitP1*tE)) + gECalDeltaShift;
+      }
+    }
+  }
   //================================================================== End Macro
 }// end main
 
@@ -2131,6 +2275,16 @@ TCanvas *plotAllTDC(double width = 1, double binLow=0, double binHigh=60){
             TString::Format("hAllGoodBar"),
             168, 0, 168);
 
+  // Per-bar good leading-edge histograms (bar = GoodElID/16)
+  hBarGoodLe.assign(NumPMTs, nullptr);
+  for (int bar = 0; bar < NumPMTs; ++bar) {
+    hBarGoodLe[bar] = new TH1F(TString::Format("hBarGoodLe_Bar%d", bar),
+                               TString::Format("Good LE (Bar %d)", bar),
+                               Nbins, binLow, binHigh);
+    for (double x : vBarGoodLe[bar]) hBarGoodLe[bar]->Fill(x);
+  }
+
+
   //fill necessary histograms from vectors
   for (double x : vAllRawLe) hAllRawLe->Fill(x);
   for (double x : vAllRawTe) hAllRawTe->Fill(x);
@@ -2143,6 +2297,62 @@ TCanvas *plotAllTDC(double width = 1, double binLow=0, double binHigh=60){
   for (double x : vAllGoodTot) hAllGoodTot->Fill(x);
   for (double x : vAllGoodPMT) hAllGoodPMT->Fill(x);
   for (double x : vAllGoodBar) hAllGoodBar->Fill(x);
+
+  // ------------------------------------------------------------
+  // Compute per-bar mean offsets relative to the global good-LE mean
+  // Correction convention used here:  toffset[bar] = mean(all) - mean(bar)
+  // (this is the value that should be ADDED to LE/TE for that bar)
+  // Bars with < 20 entries get offset = 0.
+  // ------------------------------------------------------------
+  const double meanAllGoodLe = hAllGoodLe->GetMean();
+  std::vector<double> vBarGoodLeOffset(NumPMTs, 0.0);
+  for (int bar = 0; bar < NumPMTs; ++bar) {
+    if (!hBarGoodLe[bar]) continue;
+    const double nent = hBarGoodLe[bar]->GetEntries();
+    if (nent >= 20.0) {
+      vBarGoodLeOffset[bar] = meanAllGoodLe - hBarGoodLe[bar]->GetMean();
+    } else {
+      vBarGoodLeOffset[bar] = 0.0;
+    }
+  }
+
+
+// If offsets were not loaded from file, update global vector and write them out
+// (so a first run can generate CDet_bar_toffsets.dat for subsequent corrected replays).
+if (!gBarToffsetLoaded) {
+  gBarToffsetCorr = vBarGoodLeOffset;
+
+  std::ofstream fout(gBarToffsetFile.c_str());
+  if (fout) {
+    fout << "# CDet bar time offsets (ns) to ADD to LE/TE times: toffset = mean_all - mean_bar\n";
+    fout << "# Generated by PlotElastic.C (plotAllTDC)\n";
+    fout << "# Columns: bar(1..168)  toffset_ns  entries\n";
+    fout.setf(std::ios::fixed); fout.precision(6);
+    for (int bar = 0; bar < NumPMTs; ++bar) {
+      const double ent = (hBarGoodLe[bar] ? hBarGoodLe[bar]->GetEntries() : 0.0);
+      fout << (bar+1) << " " << vBarGoodLeOffset[bar] << " " << ent << "\n";
+    }
+    std::cout << "[CDet] Wrote bar offsets to '" << gBarToffsetFile << "'\n";
+  } else {
+    std::cout << "[CDet] ERROR: could not write offset file '" << gBarToffsetFile << "'\n";
+  }
+}
+
+  // Plot offsets vs bar number (bars are numbered 1..168 on the x-axis)
+  TCanvas* cOffsets = new TCanvas("cBarGoodLeOffsets", "Mean LE offsets vs Bar", 50, 900, 1200, 500);
+  std::vector<double> xBar(NumPMTs), yOff(NumPMTs);
+  for (int bar = 0; bar < NumPMTs; ++bar) {
+    xBar[bar] = bar + 1;
+    yOff[bar] = vBarGoodLeOffset[bar];
+  }
+  TGraph* grBarOffsets = new TGraph(NumPMTs, xBar.data(), yOff.data());
+  grBarOffsets->SetName("grBarGoodLeOffsets");
+  grBarOffsets->SetTitle(TString::Format(
+      "Mean LE offsets vs Bar;Bar number;#mu_{all} - #mu_{bar} (ns)  (global mean = %.3f ns)",
+      meanAllGoodLe));
+  grBarOffsets->SetMarkerStyle(20);
+  grBarOffsets->SetMarkerSize(0.8);
+  grBarOffsets->Draw("AP");
 
   TCanvas *caa = new TCanvas("All TDC", "All TDC", 50,50,800,800);
   caa->Divide(2,3,0.01,0.01,0);
@@ -2204,6 +2414,53 @@ TCanvas *plotAllTDC(double width = 1, double binLow=0, double binHigh=60){
   //hs4->SetMinimum(0.);
   hAllGoodBar->SetFillColor(kBlue);
   hAllGoodBar->Draw();
+
+
+
+// ------------------------------------------------------------
+// Draw per-bar Good LE histograms on 4 canvases (42 per canvas)
+// Geometry:
+//   Layer 1: bars 1-84   (index 0-83)
+//   Layer 2: bars 85-168 (index 84-167)
+//   Left side : bars 1-42,   85-126  (index 0-41,   84-125)
+//   Right side: bars 43-84, 127-168  (index 42-83, 126-167)
+// Each canvas: 6 rows x 7 cols = 42 pads
+// ------------------------------------------------------------
+auto drawBarRange = [&](const char* cname, const char* ctitle, int barStart, int nBars){
+  TCanvas* c = new TCanvas(cname, ctitle, 1400, 900);
+  c->Divide(7, 6, 0.001, 0.001);
+  for(int i = 0; i < nBars; ++i){
+    int bar = barStart + i;
+    c->cd(i+1);
+    gPad->SetLeftMargin(0.12);
+    gPad->SetRightMargin(0.02);
+    gPad->SetBottomMargin(0.12);
+    gPad->SetTopMargin(0.08);
+
+    if(bar < 0 || bar >= (int)hBarGoodLe.size() || !hBarGoodLe[bar]) continue;
+
+    TH1F* h = hBarGoodLe[bar];
+    h->SetStats(0);
+
+    // Make text readable in small pads
+    h->GetXaxis()->SetTitleSize(0.07);
+    h->GetXaxis()->SetLabelSize(0.06);
+    h->GetYaxis()->SetTitleSize(0.07);
+    h->GetYaxis()->SetLabelSize(0.06);
+    h->GetXaxis()->SetTitleOffset(0.85);
+    h->GetYaxis()->SetTitleOffset(0.85);
+
+    // Optional: uncomment if you want log-y for visibility in low-stat pads
+    // gPad->SetLogy();
+
+    h->Draw("HIST");
+  }
+};
+
+drawBarRange("cBarGoodLe_L1L", "Good LE by Bar: Layer 1 Left (Bars 1-42)",    0,   42);
+drawBarRange("cBarGoodLe_L1R", "Good LE by Bar: Layer 1 Right (Bars 43-84)",  42,  42);
+drawBarRange("cBarGoodLe_L2L", "Good LE by Bar: Layer 2 Left (Bars 85-126)",  84,  42);
+drawBarRange("cBarGoodLe_L2R", "Good LE by Bar: Layer 2 Right (Bars 127-168)",126, 42);
 
   return caa;
 }
@@ -2568,12 +2825,12 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   cCDetLayerTimes1Bar->cd(3);
   hCDet1800Le->Draw();
 
-  TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
+  // TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
   // cCDetLeVsTotBar->Divide(1,2);
 
-  cCDetLeVsTotBar->cd(1);
-  //gPad->SetLogz();
-  hCDet1BarLeVsTot->Draw();
+  // cCDetLeVsTotBar->cd(1);
+  // //gPad->SetLogz();
+  // hCDet1BarLeVsTot->Draw();
   
   // cCDetLeVsTotBar->cd(2);
   // //gPad->SetLogz();
@@ -2622,6 +2879,40 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   TCanvas * cCDetTvsECalT = new TCanvas("cCDetTvsECalT", " CDet t vs ECal t", 900,700);
   hECalVsCDetT->SetMinimum(40);
   hECalVsCDetT->Draw("COLZ");
+
+  // ---------------------------------------------
+  // Linear parametrization: <CDet t> vs ECal ADC t
+  // Use a profile along X (ECal time) and fit with a straight line.
+  // This yields a robust mean-trend fit for the 2D distribution.
+  // ---------------------------------------------
+  TProfile* pCDetTvsECalT = hECalVsCDetT->ProfileX("pCDetTvsECalT");
+  pCDetTvsECalT->SetMarkerStyle(20);
+  pCDetTvsECalT->SetMarkerSize(0.6);
+
+  TF1* fCDetTvsECalT_lin = new TF1("fCDetTvsECalT_lin", "pol1", ECalMin, ECalMax);
+  // Quiet fit, respect range
+  pCDetTvsECalT->Fit(fCDetTvsECalT_lin, "QR");
+
+  // Overlay the profile points and fit on top of the COLZ plot
+  pCDetTvsECalT->Draw("SAME");
+  fCDetTvsECalT_lin->Draw("SAME");
+
+  const double p0 = fCDetTvsECalT_lin->GetParameter(0);
+  const double p1 = fCDetTvsECalT_lin->GetParameter(1);
+  const double e0 = fCDetTvsECalT_lin->GetParError(0);
+  const double e1 = fCDetTvsECalT_lin->GetParError(1);
+  std::cout << "\n[plotCDetLayersTimeComp] Linear fit for <CDet t> vs ECal ADC t:\n"
+            << "  <t_CDet> = p0 + p1 * t_ECal\n"
+            << "  p0 = " << p0 << " +/- " << e0 << " ns\n"
+            << "  p1 = " << p1 << " +/- " << e1 << " (ns/ns)\n\n";
+
+  TPaveText* ptFit = new TPaveText(0.14, 0.80, 0.52, 0.92, "NDC");
+  ptFit->SetFillColor(0);
+  ptFit->SetTextAlign(12);
+  ptFit->AddText("<t_{CDet}> = p0 + p1 t_{ECal}");
+  ptFit->AddText(Form("p0 = %.3f #pm %.3f ns", p0, e0));
+  ptFit->AddText(Form("p1 = %.5f #pm %.5f", p1, e1));
+  ptFit->Draw("SAME");
 
   TCanvas * cCDetTvsECalTSingle = new TCanvas("cCDetTvsECalTSingle", " CDet Single t vs ECal t", 900,700);
   hECalVsCDetTSingle->Draw("COLZ");

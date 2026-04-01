@@ -239,6 +239,8 @@ std::vector<int> vAllRawBar;
 
 std::vector<double> vAllGoodLe;
 std::vector<std::vector<double>> vBarGoodLe;
+std::vector<TH1F*> hBarGoodLe; // one histogram per bar (PMT group), built in plotAllTDC()
+static const int NumPMTs = NumHalfModules*NumBars; // 168 (does not include 4 ref paddles)
 std::vector<double> vAllGoodTe;
 std::vector<double> vAllGoodTot;
 std::vector<int> vAllGoodPMT;
@@ -721,7 +723,7 @@ std::vector<T> fill2D(const TTreeReaderArray<T>& arr) {
   return tmp;
 }
 
-void PlotElastic(Int_t RunNumber1=5811, Int_t nevents=50000, Int_t elastic = 0, Int_t minSeg = -1, Int_t maxSeg = -1,
+void PlotElastic_with_barhist(Int_t RunNumber1=5811, Int_t nevents=50000, Int_t elastic = 0, Int_t minSeg = -1, Int_t maxSeg = -1,
 	Double_t LeMin = 0.02, Double_t LeMax = 60.0,
 	Double_t TotMin = 1.0, Double_t TotMax = 150.0, 
 	Int_t nhitcutlow1 = 1, Int_t nhitcuthigh1 = 100,
@@ -955,6 +957,8 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
 
   vCDetPaddleRawTot.assign(2688, std::vector<double>{});
   vCDetPaddleCutTot.assign(2688, std::vector<double>{});
+  // Per-bar storage for good leading-edge times (bar = GoodElID/16)
+  vBarGoodLe.assign(NumPMTs, std::vector<double>{});
   //int onlySegment = -1; // set to >=0 to pick just one
 
   AddRunFilesToChain(T, REPLAYED_DIR.Data(), runnum, minSeg, maxSeg);
@@ -1548,6 +1552,12 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
               vAllGoodTot.push_back(GoodElTot[el]*TDC_calib_to_ns);
               vAllGoodPMT.push_back(GoodElID[el]);
               vAllGoodBar.push_back((Int_t)(GoodElID[el]/16));
+              {
+                const int bar = (int)(GoodElID[el] / 16);
+                if (0 <= bar && bar < NumPMTs) {
+                  vBarGoodLe[bar].push_back(GoodElLE[el]*TDC_calib_to_ns - event_ref_tdc);
+                }
+              }
 
               // hAllGoodLe->Fill(GoodElLE[el]*TDC_calib_to_ns-event_ref_tdc+60.0);
               // hAllGoodTe->Fill(GoodElTE[el]*TDC_calib_to_ns-event_ref_tdc+60.0);
@@ -2131,6 +2141,16 @@ TCanvas *plotAllTDC(double width = 1, double binLow=0, double binHigh=60){
             TString::Format("hAllGoodBar"),
             168, 0, 168);
 
+  // Per-bar good leading-edge histograms (bar = GoodElID/16)
+  hBarGoodLe.assign(NumPMTs, nullptr);
+  for (int bar = 0; bar < NumPMTs; ++bar) {
+    hBarGoodLe[bar] = new TH1F(TString::Format("hBarGoodLe_Bar%d", bar),
+                               TString::Format("Good LE (Bar %d)", bar),
+                               Nbins, binLow, binHigh);
+    for (double x : vBarGoodLe[bar]) hBarGoodLe[bar]->Fill(x);
+  }
+
+
   //fill necessary histograms from vectors
   for (double x : vAllRawLe) hAllRawLe->Fill(x);
   for (double x : vAllRawTe) hAllRawTe->Fill(x);
@@ -2568,12 +2588,12 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   cCDetLayerTimes1Bar->cd(3);
   hCDet1800Le->Draw();
 
-  TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
+  // TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
   // cCDetLeVsTotBar->Divide(1,2);
 
-  cCDetLeVsTotBar->cd(1);
-  //gPad->SetLogz();
-  hCDet1BarLeVsTot->Draw();
+  // cCDetLeVsTotBar->cd(1);
+  // //gPad->SetLogz();
+  // hCDet1BarLeVsTot->Draw();
   
   // cCDetLeVsTotBar->cd(2);
   // //gPad->SetLogz();

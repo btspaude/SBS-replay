@@ -1,0 +1,36 @@
+\contentsline {section}{\numberline {1}Introduction}{3}{section.1}%
+\contentsline {section}{\numberline {2}Detector Organization}{3}{section.2}%
+\contentsline {section}{\numberline {3}General Timing Definitions}{3}{section.3}%
+\contentsline {section}{\numberline {4}Step 1: Initial Timing Inspection}{4}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Main ROOT Command}{4}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Plotting Function Command}{4}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Purpose}{4}{subsection.4.3}%
+\contentsline {section}{\numberline {5}Step 2: Determination of Per-Bar Timing Offsets}{4}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Method}{4}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Main ROOT Command}{5}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Plotting Function Command}{5}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Products of this Step}{5}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}Relevant Figures}{6}{subsection.5.5}%
+\contentsline {section}{\numberline {6}Step 3: Visualization of Per-Bar Timing Histograms}{7}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Canvas Organization}{7}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Main ROOT Command}{7}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Plotting Function Command}{7}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Purpose}{8}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Step 4: Writing and Reading the Bar Offset File}{8}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Main ROOT Command}{8}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Plotting Function Command}{8}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Application of the Correction}{8}{subsection.7.3}%
+\contentsline {section}{\numberline {8}Step 5: Study of the ECal Time Dependence}{9}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Main ROOT Command}{9}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Plotting Function Command}{9}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Fit Procedure}{9}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Relevant Figures}{10}{subsection.8.4}%
+\contentsline {section}{\numberline {9}Step 6: Application of the ECal Timing Correction}{10}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Definition of the Correction}{10}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Global Shift to Set Mean LE Time to 30 ns}{10}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Main ROOT Command}{11}{subsection.9.3}%
+\contentsline {subsection}{\numberline {9.4}Plotting Function Command}{11}{subsection.9.4}%
+\contentsline {section}{\numberline {10}Step 7: Validation of the Final Calibration}{11}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Suggested Validation Figures}{12}{subsection.10.1}%
+\contentsline {section}{\numberline {11}Practical Notes}{13}{section.11}%
+\contentsline {section}{\numberline {12}Summary}{13}{section.12}%
