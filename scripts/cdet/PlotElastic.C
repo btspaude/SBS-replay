@@ -2567,12 +2567,12 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   cCDetLayerTimes1Bar->cd(3);
   hCDet1800Le->Draw();
 
-  // TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
+  TCanvas *cCDetLeVsTotBar = new TCanvas("cCDetLeVsTotBar", "CDet LE vs Tot (1 Paddle)",900,700);
   // cCDetLeVsTotBar->Divide(1,2);
 
-  // cCDetLeVsTotBar->cd(1);
-  // //gPad->SetLogz();
-  // hCDet1BarLeVsTot->Draw();
+  cCDetLeVsTotBar->cd(1);
+  //gPad->SetLogz();
+  hCDet1BarLeVsTot->Draw();
   
   // cCDetLeVsTotBar->cd(2);
   // //gPad->SetLogz();
