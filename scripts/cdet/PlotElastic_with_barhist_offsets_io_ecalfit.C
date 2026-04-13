@@ -137,7 +137,7 @@ inline bool IsUnusedPixel(int elID) {
 
 
 //const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR")) + "/wrongdbRootfiles";
-const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR"));
+const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR")) + "/rootfiles";
 
 // const TString ANALYSED_DIR = gSystem->Getenv("ANALYSED_DIR");
 //const TString REPLAYED_DIR = "/volatile/halla/sbs/btspaude/cdet/rootfiles";
@@ -2837,6 +2837,10 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   ptFit->AddText(Form("p0 = %.3f #pm %.3f ns", p0, e0));
   ptFit->AddText(Form("p1 = %.5f #pm %.5f", p1, e1));
   ptFit->Draw("SAME");
+
+  TCanvas * cCDetTvsECalT_noProfile = new TCanvas("cCDetTvsECalT_noProfile", " CDet t vs ECal t", 900,700);
+  hECalVsCDetT->SetMinimum(40);
+  hECalVsCDetT->Draw("COLZ");
 
   TCanvas * cCDetTvsECalTSingle = new TCanvas("cCDetTvsECalTSingle", " CDet Single t vs ECal t", 900,700);
   hECalVsCDetTSingle->Draw("COLZ");

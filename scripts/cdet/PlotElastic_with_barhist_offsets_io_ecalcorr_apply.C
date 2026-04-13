@@ -137,7 +137,7 @@ inline bool IsUnusedPixel(int elID) {
 
 
 //const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR")) + "/wrongdbRootfiles";
-const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR"));
+const TString REPLAYED_DIR = TString(gSystem->Getenv("OUT_DIR")) + "/rootfiles";
 
 // const TString ANALYSED_DIR = gSystem->Getenv("ANALYSED_DIR");
 //const TString REPLAYED_DIR = "/volatile/halla/sbs/btspaude/cdet/rootfiles";
@@ -245,8 +245,8 @@ std::vector<double> vAllGoodECalT;                 // per-hit ECal ADC time alig
 std::vector<std::vector<double>> vBarGoodLeECalT;        // per-bar per-hit ECal time aligned with vBarGoodLe
 
 // --- ECal-time linear correction: remove correlation t_CDet vs t_ECal, then apply global shift
-double gECalFitP0 = -40.303;    // p0 from fit: <t_CDet> = p0 + p1*t_ECal
-double gECalFitP1 =  0.63615;   // p1 from fit
+double gECalFitP0 = -39.97;    // p0 from fit: <t_CDet> = p0 + p1*t_ECal
+double gECalFitP1 =  0.634;   // p1 from fit
 double gTargetMeanLE = 30.0;    // desired mean corrected LE (ns)
 double gECalDeltaShift = 0.0;   // computed shift applied after removing correlation
 bool   gUseECalTimeCorr = true; // enable/disable ECal-time correction
@@ -1548,7 +1548,7 @@ hXECalCDet2_min = new TH2F("XECalCDet2_min","XECalCDet2_min (min |x_{CDet}-x_{EC
       bool goodhit_ECal_reconstruction = *ECalY > -1.2 && *ECalY < 1.2 &&
                                          *ECalX > -1.5 && *ECalX < 1.5 &&
                                          *ECalX != 0.00 && *ECalY != 0.00;
-      bool goodhit_le_time = GoodElLE[el] >= LeMin/TDC_calib_to_ns && GoodElLE[el] <= LeMax/TDC_calib_to_ns;
+      bool goodhit_le_time = GoodElLE[el] >= LeMin /TDC_calib_to_ns && GoodElLE[el] <= LeMax/TDC_calib_to_ns;
       bool goodhit_tot = GoodElTot[el] >= TotMin/TDC_calib_to_ns && GoodElTot[el] <= TotMax/TDC_calib_to_ns;
       bool goodhit_hit_mult = TDCmult[el] < TDCmult_cut;
       bool goodhit_CDet_X = GoodX[el] < xcut;
@@ -2523,7 +2523,7 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   TH1::AddDirectory(kFALSE);
   
   int TDCBinNum = (int)((DiffMax-DiffMin)/Width);
-  int NADCBins = (int)((ECalMax-ECalMin)/4); //4ns bins for ECal, since fADC 4ns resolution
+  int NADCBins = (int)((ECalMax-ECalMin)/Width); //4ns bins for ECal, since fADC 4ns resolution
 
   TH1D* hCDetTimeDiff = new TH1D("hCDetTimeDiff", "CDet Layer Time Difference; Time Difference (ns);Counts", TDCBinNum, DiffMin, DiffMax);
   TH1D* hCDetXDiff = new TH1D("hCDetXDiff", "CDet Layer X Difference; X Diff (m);Counts", 600,-1.5,1.5);
@@ -2610,7 +2610,8 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
     // ------------------------------
     const size_t Nhits = std::min(vGoodLe[ev].size(), vGoodTot[ev].size());
     for (size_t ihit = 0; ihit < Nhits; ++ihit) {
-      if (vGoodLe[ev][ihit] >= LeMin && vGoodLe[ev][ihit] <= LeMax && vGoodTot[ev][ihit] >= TotMinCut && vGoodTot[ev][ihit] <= TotMaxCut && t_ECal >= ECalMin && t_ECal <= ECalMax){
+      double t_le = vGoodLe[ev][ihit];
+      if (t_le >= LeMin && t_le <= LeMax && vGoodTot[ev][ihit] >= TotMinCut && vGoodTot[ev][ihit] <= TotMaxCut && t_ECal >= ECalMin && t_ECal <= ECalMax){
         if (vGoodID[ev][ihit] >= 0 && vGoodID[ev][ihit] <= 1343){ //layer 1 hits
           vCDet1Time.push_back(vGoodLe[ev][ihit]);
           vCDet1Tot.push_back(vGoodTot[ev][ihit]);
@@ -2913,6 +2914,10 @@ void plotCDetLayersTimeComp(double Width = 1, double diffMinCut = -15, double di
   ptFit->AddText(Form("p0 = %.3f #pm %.3f ns", p0, e0));
   ptFit->AddText(Form("p1 = %.5f #pm %.5f", p1, e1));
   ptFit->Draw("SAME");
+
+  TCanvas * cCDetTvsECalT_noProfile = new TCanvas("cCDetTvsECalT_noProfile", " CDet t vs ECal t", 900,700);
+  hECalVsCDetT->SetMinimum(0);
+  hECalVsCDetT->Draw("COLZ");
 
   TCanvas * cCDetTvsECalTSingle = new TCanvas("cCDetTvsECalTSingle", " CDet Single t vs ECal t", 900,700);
   hECalVsCDetTSingle->Draw("COLZ");
