@@ -284,14 +284,14 @@ void PlotPairingVariables(int runNumber = 6077,
       g->SetPoint(point, bar%84, h.GetStdDev());
       g->SetPointError(point, 0, h.GetStdDevError());
     }
-    if (csv) {
-      csv << bar << ',' << bar/84+1 << ',' << bar%84 << ',' << h.GetEntries() << ',';
-      if (h.GetEntries() >= 2)
-        csv << h.GetMean() << ',' << h.GetStdDev() << ',' << h.GetStdDevError();
-      else csv << ",,";
-      csv << ',' << h.GetBinContent(0) << ',' << h.GetBinContent(nECalDT+1)
-          << ',' << (valid ? "accepted" : "insufficient_entries") << '\n';
-    }
+    // if (csv) {
+    //   csv << bar << ',' << bar/84+1 << ',' << bar%84 << ',' << h.GetEntries() << ',';
+    //   if (h.GetEntries() >= 2)
+    //     csv << h.GetMean() << ',' << h.GetStdDev() << ',' << h.GetStdDevError();
+    //   else csv << ",,";
+    //   csv << ',' << h.GetBinContent(0) << ',' << h.GetBinContent(nECalDT+1)
+    //       << ',' << (valid ? "accepted" : "insufficient_entries") << '\n';
+    // }
   }
   auto *canvas = new TCanvas("cPairSigmaVsBar_"+tag, TString::Format("Run %d | ", runNumber)+cuts, 1200, 700);
   double ymax = 1;
