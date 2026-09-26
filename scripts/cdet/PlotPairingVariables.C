@@ -287,7 +287,6 @@ void PlotPairingVariables(int runNumber = 6077,
   for (int bar = 0; bar < 168; ++bar) {
     const auto &h = *histograms[bar];
     const bool valid = h.GetEntries() >= minEntriesPerBar;
-    Report(h);
     if (valid) {
       auto *g = bar < 84 ? g1 : g2;
       const int point = g->GetN();
