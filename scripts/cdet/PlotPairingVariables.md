@@ -96,10 +96,78 @@ the selected Layer-1 bar:
    \]
 3. A rough out-of-plane angle in transport coordinates.
 
-For the angle diagnostic, the macro uses transport `y` and `z` and assumes the
-trajectory begins at `(y,z)=(0,0)`. It fits a line constrained through the
-origin and the three measured points: CDet layer 1, CDet layer 2, and ECal.
-For the points `(zi, yi)`, the fitted slope is
+### Out-of-plane angle derivation
+
+The out-of-plane direction is the vertical transport-coordinate direction.
+The macro therefore uses the pulse `y` and `z` coordinates, rather than the
+horizontal `x` coordinate used by the pair-position residual. For each
+accepted pair, it constructs four points in the transport `y-z` plane:
+
+```text
+point 0: (z0, y0) = (0, 0)                         assumed target origin
+point 1: (z1, y1) = (pulse.z[i1], pulse.y[i1])     CDet Layer 1
+point 2: (z2, y2) = (pulse.z[i2], pulse.y[i2])     CDet Layer 2
+point 3: (z3, y3) = (6.144 m, earm.ecal.y)         ECal
+```
+
+The value `6.144 m` is the ECal distance used by the existing CDet projection
+macros. The ECal y coordinate is treated as a measured point at that z. The
+origin point is an analysis assumption for this rough diagnostic; it is not a
+new reconstructed vertex.
+
+The macro assumes that these four points are described approximately by a
+straight line through the origin,
+
+```text
+y(z) = m z,
+```
+
+where `m` is the vertical slope. For a single point the least-squares residual
+would be `yi - m zi`. The macro chooses `m` to minimize the sum of squared
+residuals for all three measured points (the origin has zero residual for any
+finite m):
+
+\[
+\chi^2(m) = \sum_{i=1}^{3}(y_i-mz_i)^2.
+\]
+
+Differentiating with respect to `m` and setting the result to zero gives
+
+\[
+\frac{d\chi^2}{dm} = -2\sum_{i=1}^{3}z_i(y_i-mz_i)=0,
+\]
+
+so the fitted slope is
+
+\[
+m = \frac{\sum_{i=1}^{3}z_i y_i}{\sum_{i=1}^{3}z_i^2}
+  = \frac{z_1y_1+z_2y_2+6.144\,y_{ECal}}
+         {z_1^2+z_2^2+6.144^2}.
+\]
+
+The physical angle of a line with slope `m` relative to the transport z axis
+is
+
+\[
+\theta_y=\arctan(m).
+\]
+
+The macro multiplies this angle in radians by 1000, so the histogram is in
+mrad:
+
+```cpp
+angle_mrad = 1000.0 * std::atan(m);
+```
+
+This calculation is repeated independently for every accepted pair in the
+selected-bar geometry canvas and for every accepted pair in the all-detector
+geometry canvas. A pair contributes only when both pulse y/z coordinates and
+the ECal y coordinate are finite and the denominator
+`z1*z1 + z2*z2 + 6.144*6.144` is positive. The pair’s two CDet points are not
+averaged for this angle; both measurements enter the fit separately, along
+with the ECal point.
+
+The current angle display range is
 
 \[
 m = \frac{\sum_i z_i y_i}{\sum_i z_i^2},
@@ -108,7 +176,13 @@ m = \frac{\sum_i z_i y_i}{\sum_i z_i^2},
 
 The displayed angle is `1000*theta_y` in mrad. The current display range is
 `-60` to `80 mrad` with `5 mrad` bins. This is a rough geometric diagnostic,
-not a replacement for a full track or optics reconstruction.
+not a replacement for a full track or optics reconstruction. It does not use
+uncertainties or perform a weighted fit, does not account for magnetic
+transport or detector alignment, and does not fit a free vertex. A nonzero
+beam-spot or vertex offset, curved transport, or significant y calibration
+error can therefore bias this angle. The result should be interpreted as the
+best straight-line slope through the assumed-origin four-point construction,
+not as a precision scattering-angle measurement.
 
 The standard deviation of the second panel is printed as a rough CDet x
 position-resolution estimate in millimeters.
