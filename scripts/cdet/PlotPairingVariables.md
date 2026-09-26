@@ -83,10 +83,10 @@ its ROOT moment-based error; it does not perform a Gaussian fit.
 The current display range for the ECal pair residual is `-40` to `0 ns`. This
 is a display range, while the ellipse uses the residual centered near `-26 ns`.
 
-## Pair geometry canvas
+## Pair geometry canvases
 
-The geometry canvas has three panels, all using accepted pairs from the
-selected Layer-1 bar:
+The focused geometry canvas has three panels, all using accepted pairs from
+the selected Layer-1 bar:
 
 1. A two-dimensional plot with `x1 - x2` on the horizontal axis and `x1` on
    the vertical axis.
@@ -112,6 +112,10 @@ diagnostic, not a replacement for a full track or optics reconstruction.
 The standard deviation of the second panel is printed as a rough CDet x
 position-resolution estimate in millimeters.
 
+A second, otherwise identical geometry canvas is filled before the selected
+bar restriction and therefore uses accepted pairs from all detector bars. Its
+output names end in `_geometry_all`.
+
 ## Bar-width canvas
 
 The fourth canvas shows the standard deviation of
@@ -128,8 +132,7 @@ number of entries in the chained run files. It reports the cumulative number
 of events containing at least one pair that passes the macro’s checks and
 configured cuts.
 
-With `output.save_plots: 1`, the macro saves four thesis-ready canvases as
+With `output.save_plots: 1`, the macro saves five thesis-ready canvases as
 both PDF and PNG, plus the bar-width CSV. Files are written under
 `output.directory` with run and selected-bar names. Plot saving is disabled
 when `output.save_plots: 0`.
-

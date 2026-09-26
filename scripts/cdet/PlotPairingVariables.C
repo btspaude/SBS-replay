@@ -39,8 +39,9 @@
 // display limits for x1-x2, x1, x residual, and angle, followed by the ECal
 // event adctime and energy cut limits.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
-// One event pass produces all four canvases, including geometry and the all-bar scan.
-// savePlots defaults to false. When true, save all four as PNG AND PDF plus
+// One event pass produces all five canvases, including focused/all-detector
+// geometry and the all-bar scan. savePlots defaults to false. When true, save
+// all five as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
 // Standard deviations and their ROOT moment-based error estimates include
@@ -174,11 +175,45 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
       title+";Out-of-plane angle (mrad);Pairs", nGeometryBins,
       angleMinMrad, angleMaxMrad);
+  const TString allTitle = TString::Format("Run %d, all bars", runNumber);
+  TH2D hAllPairXDiffVsX1("hAllPairXDiffVsX1_"+tag,
+      allTitle+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
+      xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
+  TH1D hAllPairXResidual("hAllPairXResidual_"+tag,
+      allTitle+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
+      nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
+      allTitle+";Out-of-plane angle (mrad);Pairs", nGeometryBins,
+      angleMinMrad, angleMaxMrad);
   hPairXDiffVsX1.SetDirectory(nullptr);
   hPairXDiffVsX1.SetStats(false);
+  hAllPairXDiffVsX1.SetDirectory(nullptr);
+  hAllPairXDiffVsX1.SetStats(false);
   for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
-                  &hPairXResidual, &hOutOfPlaneAngle})
+                  &hPairXResidual, &hOutOfPlaneAngle, &hAllPairXResidual,
+                  &hAllOutOfPlaneAngle})
     Prepare(*h);
+
+  auto fillGeometry = [&](TH2D &xDiffVsX1, TH1D &xResidual,
+                          TH1D &outOfPlaneAngle, size_t i1, size_t i2) {
+    if (!std::isfinite(pulseX[i1]) || !std::isfinite(pulseX[i2]) ||
+        !std::isfinite(pulseY[i1]) || !std::isfinite(pulseY[i2]) ||
+        !std::isfinite(pulseZ[i1]) || !std::isfinite(pulseZ[i2]) ||
+        !std::isfinite(*ecalX) || !std::isfinite(*ecalY))
+      return;
+    const double pairMeanZ = 0.5 * (pulseZ[i1] + pulseZ[i2]);
+    const double pairMeanX = 0.5 * (pulseX[i1] + pulseX[i2]);
+    const double projectedECalX = *ecalX * pairMeanZ / kECalZFromTargetM;
+    xDiffVsX1.Fill(pulseX[i1] - pulseX[i2], pulseX[i1]);
+    xResidual.Fill(pairMeanX - projectedECalX);
+    const double z1 = pulseZ[i1], z2 = pulseZ[i2];
+    const double numerator = z1 * pulseY[i1] + z2 * pulseY[i2] +
+                             kECalZFromTargetM * (*ecalY);
+    const double denominator = z1*z1 + z2*z2 +
+                               kECalZFromTargetM*kECalZFromTargetM;
+    if (denominator > 0.0)
+      outOfPlaneAngle.Fill(1000.0 * std::atan(numerator / denominator));
+  };
 
   // All 168 paired-member histograms are filled before the selected-bar cut.
   std::array<std::unique_ptr<TH1D>, 168> histograms;
@@ -237,6 +272,11 @@ void PlotPairingVariables(int runNumber = 6077,
       // This is ECal minus each member's LE, NOT ECal minus pair-mean time.
       histograms[id1/16]->Fill(pulseECalDT[i1]);
       histograms[id2/16]->Fill(pulseECalDT[i2]);
+      // Geometry diagnostics are filled for every accepted pair before the
+      // selected-bar restriction, so the all-detector canvas is independent
+      // of the focused bar.
+      fillGeometry(hAllPairXDiffVsX1, hAllPairXResidual,
+                   hAllOutOfPlaneAngle, i1, i2);
 
       // Only the first two canvases restrict the Layer-1 bar.
       // Keep the actual matched L2 partner regardless of its bar number.
@@ -247,27 +287,7 @@ void PlotPairingVariables(int runNumber = 6077,
       hECalPairDT.Fill(pairECalDT[pair]);
       hLEL1.Fill(pairLEL1[pair]);
       hLEL2.Fill(pairLEL2[pair]);
-      if (std::isfinite(pulseX[i1]) && std::isfinite(pulseX[i2]) &&
-          std::isfinite(pulseY[i1]) && std::isfinite(pulseY[i2]) &&
-          std::isfinite(pulseZ[i1]) && std::isfinite(pulseZ[i2]) &&
-          std::isfinite(*ecalX) && std::isfinite(*ecalY) &&
-          std::fabs(kECalZFromTargetM) > 0.0) {
-        const double pairMeanZ = 0.5 * (pulseZ[i1] + pulseZ[i2]);
-        const double pairMeanX = 0.5 * (pulseX[i1] + pulseX[i2]);
-        const double projectedECalX = *ecalX * pairMeanZ / kECalZFromTargetM;
-        hPairXDiffVsX1.Fill(pulseX[i1] - pulseX[i2], pulseX[i1]);
-        hPairXResidual.Fill(pairMeanX - projectedECalX);
-
-        // Constrained least-squares slope y = m z through (0,0), CDet L1,
-        // CDet L2, and ECal. The transport-coordinate angle is atan(m).
-        const double z1 = pulseZ[i1], z2 = pulseZ[i2];
-        const double numerator = z1 * pulseY[i1] + z2 * pulseY[i2] +
-                                 kECalZFromTargetM * (*ecalY);
-        const double denominator = z1*z1 + z2*z2 +
-                                   kECalZFromTargetM*kECalZFromTargetM;
-        if (std::isfinite(projectedECalX) && denominator > 0.0)
-          hOutOfPlaneAngle.Fill(1000.0 * std::atan(numerator / denominator));
-      }
+      fillGeometry(hPairXDiffVsX1, hPairXResidual, hOutOfPlaneAngle, i1, i2);
     }
     if (eventHasGoodPair)
       ++goodPairEventCount;
@@ -360,6 +380,22 @@ void PlotPairingVariables(int runNumber = 6077,
   if (savePlots) {
     geometryCanvas->SaveAs(outputPrefix+"_geometry.pdf");
     geometryCanvas->SaveAs(outputPrefix+"_geometry.png");
+  }
+  auto *allGeometryCanvas = new TCanvas("cAllPairGeometry_"+tag,
+      allTitle+" | pair geometry", 1500, 500);
+  allGeometryCanvas->Divide(3, 1);
+  allGeometryCanvas->cd(1);
+  hAllPairXDiffVsX1.DrawCopy("COLZ");
+  allGeometryCanvas->cd(2);
+  hAllPairXResidual.DrawCopy("HIST");
+  Annotate(hAllPairXResidual);
+  allGeometryCanvas->cd(3);
+  hAllOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hAllOutOfPlaneAngle);
+  allGeometryCanvas->Update();
+  if (savePlots) {
+    allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.pdf");
+    allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.png");
   }
 
   // 8. Third canvas: sigma versus bar number within each detector layer.
