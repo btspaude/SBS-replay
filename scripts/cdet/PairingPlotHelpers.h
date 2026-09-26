@@ -46,8 +46,6 @@ inline void Annotate(const TH1D &h) {
   box->SetBorderSize(0);
   box->AddText(TString::Format("N = %.0f", h.GetEntries()));
   box->AddText(WidthLabel(h));
-  box->AddText(TString::Format("Under/overflow: %.0f / %.0f",
-      h.GetBinContent(0), h.GetBinContent(h.GetNbinsX()+1)));
   box->Draw();
 }
 

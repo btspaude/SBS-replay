@@ -39,7 +39,8 @@
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
 // Standard deviations and their ROOT moment-based error estimates include
-// all finite selected values, including histogram underflow/overflow.
+// all finite selected values, including histogram tails. Tail counts are kept
+// in the CSV/terminal diagnostics but are not drawn on the thesis canvases.
 // No Gaussian fit is used. Pair/event correlations are not modeled in errors.
 void PlotPairingVariables(int runNumber = 6077,
                          const char *inputDirectory = nullptr,
