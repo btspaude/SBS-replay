@@ -32,7 +32,8 @@
 // PlotPairingVariables("PlotPairingVariables.conf", "/path/to/Rootfiles");
 // Positional arguments after maxEvents: L1 bar, bin width, LE min/max,
 // layer-dt min/max, ECal-dt min/max, member ToT min/max, maximum |L2-L1|,
-// maximum ECal ellipse radius, savePlots, outputDirectory, minEntriesPerBar.
+// maximum ECal ellipse radius, savePlots, outputDirectory, minEntriesPerBar,
+// minimum and maximum segment (both -1 means all segments).
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
 // One event pass produces all three canvases, including the all-bar scan.
 // savePlots defaults to false. When true, save all three as PNG AND PDF plus
@@ -51,7 +52,8 @@ void PlotPairingVariables(int runNumber = 6077,
                          double memberToTMinNs = 0, double memberToTMaxNs = 1e9,
                          double layerDTMaxNs = -1, double pairRadiusMax = -1,
                          bool savePlots = false, const char *outputDirectory = "pairing_plots",
-                         int minEntriesPerBar = 30) {
+                         int minEntriesPerBar = 30, int segmentMin = -1,
+                         int segmentMax = -1) {
   using namespace CDetPairingPlots;
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
@@ -67,13 +69,13 @@ void PlotPairingVariables(int runNumber = 6077,
     if (outDir)
       input = outDir;
   }
-  if (input.IsNull() || maxEvents < -1) {
-    std::cerr << "Supply an input directory (or OUT_DIR) and maxEvents >= -1.\n";
+  if (input.IsNull() || maxEvents < -1 || segmentMin < -1 || segmentMax < -1) {
+    std::cerr << "Supply an input directory (or OUT_DIR), maxEvents >= -1, and valid segment limits.\n";
     return;
   }
 
   TChain chain("T");
-  if (CDetRunDataset::AddToChain(&chain, runNumber, input.Data()) <= 0 ||
+  if (CDetRunDataset::AddToChain(&chain, runNumber, input.Data(), segmentMin, segmentMax) <= 0 ||
       chain.GetEntries() == 0) {
     std::cerr << "No replay events found for run " << runNumber << ".\n";
     return;
@@ -340,7 +342,8 @@ void PlotPairingVariables(const char *configFile,
   }
   const std::set<std::string> keys = {
     "config.version", "analysis.run_number", "analysis.input_directory",
-    "analysis.events", "analysis.layer1_bar", "cuts.member_tot_min_ns",
+    "analysis.events", "analysis.min_segment", "analysis.max_segment",
+    "analysis.layer1_bar", "cuts.member_tot_min_ns",
     "cuts.member_tot_max_ns", "cuts.layer_dt_max_ns", "cuts.pair_radius_max",
     "plots.bin_width_ns", "plots.le_min_ns", "plots.le_max_ns",
     "plots.layer_dt_min_ns", "plots.layer_dt_max_ns", "plots.ecal_dt_min_ns",
@@ -377,9 +380,12 @@ void PlotPairingVariables(const char *configFile,
       throw std::runtime_error("config.version must be 1");
     const Long64_t run = integer("analysis.run_number", 6077);
     const Long64_t bar = integer("analysis.layer1_bar", 30);
+    const Long64_t segmentMin = integer("analysis.min_segment", -1);
+    const Long64_t segmentMax = integer("analysis.max_segment", -1);
     const Long64_t minimum = integer("plots.min_entries_per_bar", 30);
     const Long64_t save = integer("output.save_plots", 0);
     if (run <= 0 || run > 2147483647 || bar < 0 || bar >= 84 ||
+        segmentMin < -1 || segmentMax < -1 ||
         minimum < 2 || minimum > 2147483647 || (save != 0 && save != 1))
       throw std::runtime_error("Invalid run, bar, minimum entries, or save flag (use 0 or 1)");
     const TString input = inputDirectoryOverride ? inputDirectoryOverride :
@@ -392,7 +398,9 @@ void PlotPairingVariables(const char *configFile,
         number("plots.ecal_dt_min_ns", -100), number("plots.ecal_dt_max_ns", 50),
         number("cuts.member_tot_min_ns", 0), number("cuts.member_tot_max_ns", 1e9),
         number("cuts.layer_dt_max_ns", -1), number("cuts.pair_radius_max", -1),
-        save != 0, config.GetValue("output.directory", "pairing_plots"), static_cast<int>(minimum));
+        save != 0, config.GetValue("output.directory", "pairing_plots"),
+        static_cast<int>(minimum), static_cast<int>(segmentMin),
+        static_cast<int>(segmentMax));
   } catch (const std::exception &error) {
     std::cerr << "Invalid pairing configuration: " << error.what() << '\n';
   }

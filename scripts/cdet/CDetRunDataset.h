@@ -112,9 +112,7 @@ inline std::vector<TString> Select(int runNumber, const char *directory,
       std::swap(segmentMin, segmentMax);
   }
 
-  Dataset *selected = nullptr;
-  int selectedExcess = 0;
-  int selectedSpan = -1;
+  std::vector<Dataset *> selectedDatasets;
   for (auto &entry : datasets) {
     Dataset &candidate = entry.second;
     if (candidate.baseName.IsNull())
@@ -124,42 +122,43 @@ inline std::vector<TString> Select(int runNumber, const char *directory,
     if (span < 0)
       continue;
 
-    if (useRange) {
-      if (candidate.info.firstSegment > segmentMin ||
-          candidate.info.lastSegment < segmentMax)
-        continue;
-      const int excess = (segmentMin - candidate.info.firstSegment) +
-                         (candidate.info.lastSegment - segmentMax);
-      if (!selected || excess < selectedExcess ||
-          (excess == selectedExcess && span > selectedSpan)) {
-        selected = &candidate;
-        selectedExcess = excess;
-        selectedSpan = span;
-      }
-    } else if (!selected || span > selectedSpan) {
-      selected = &candidate;
-      selectedSpan = span;
-    }
+    if (useRange && (candidate.info.lastSegment < segmentMin ||
+                     candidate.info.firstSegment > segmentMax))
+      continue;
+    // With no explicit segment range, process every coherent segment group
+    // for the run. A dataset's rollover parts remain grouped and ordered.
+    selectedDatasets.push_back(&candidate);
   }
 
-  if (!selected)
+  std::sort(selectedDatasets.begin(), selectedDatasets.end(),
+            [](const Dataset *a, const Dataset *b) {
+                if (a->info.firstSegment != b->info.firstSegment)
+                  return a->info.firstSegment < b->info.firstSegment;
+                if (a->info.lastSegment != b->info.lastSegment)
+                  return a->info.lastSegment < b->info.lastSegment;
+                return a->baseName < b->baseName;
+            });
+
+  if (selectedDatasets.empty())
     return {};
 
   TString prefix(directory);
   if (!prefix.EndsWith("/"))
     prefix += "/";
   std::vector<TString> result;
-  result.push_back(prefix + selected->baseName);
-  int expectedPart = 1;
-  for (const auto &part : selected->parts) {
-    if (part.first != expectedPart) {
-      std::cerr << "[CDet dataset] Missing rollover part " << expectedPart
-                << " for " << selected->baseName << "; stopping before part "
-                << part.first << ".\n";
-      break;
+  for (const Dataset *dataset : selectedDatasets) {
+    result.push_back(prefix + dataset->baseName);
+    int expectedPart = 1;
+    for (const auto &part : dataset->parts) {
+      if (part.first != expectedPart) {
+        std::cerr << "[CDet dataset] Missing rollover part " << expectedPart
+                  << " for " << dataset->baseName << "; stopping before part "
+                  << part.first << ".\n";
+        break;
+      }
+      result.push_back(prefix + part.second);
+      ++expectedPart;
     }
-    result.push_back(prefix + part.second);
-    ++expectedPart;
   }
   return result;
 }
