@@ -77,6 +77,7 @@ void PlotPairingVariables(int runNumber = 6077,
     std::cerr << "No replay events found for run " << runNumber << ".\n";
     return;
   }
+  const Long64_t totalEntries = chain.GetEntries();
 
   TTreeReader reader(&chain);
 
@@ -146,11 +147,12 @@ void PlotPairingVariables(int runNumber = 6077,
     Prepare(*histograms[bar]);
   }
 
-  Long64_t eventsRead = 0, malformedPairs = 0;
+  Long64_t eventsRead = 0, goodPairEventCount = 0, malformedPairs = 0;
   const TString cuts = CutLabel(memberToTMinNs, memberToTMaxNs, layerDTMaxNs, pairRadiusMax);
   std::cout << cuts << "\nNo additional ECal event cut is imposed.\n";
   while ((maxEvents < 0 || eventsRead < maxEvents) && reader.Next()) {
     ++eventsRead;
+    bool eventHasGoodPair = false;
     const size_t nPairs = pairPixelL1.GetSize();
     if (pulsePixelID.GetSize() != pulseToT.GetSize() ||
         pulsePixelID.GetSize() != pulseECalDT.GetSize() ||
@@ -181,6 +183,7 @@ void PlotPairingVariables(int runNumber = 6077,
         ++malformedPairs;
         continue;
       }
+      eventHasGoodPair = true;
       // 3. Detector-wide paired-member timing, under the same study cuts.
       // This is ECal minus each member's LE, NOT ECal minus pair-mean time.
       histograms[id1/16]->Fill(pulseECalDT[i1]);
@@ -196,13 +199,20 @@ void PlotPairingVariables(int runNumber = 6077,
       hLEL1.Fill(pairLEL1[pair]);
       hLEL2.Fill(pairLEL2[pair]);
     }
+    if (eventHasGoodPair)
+      ++goodPairEventCount;
+    if (eventsRead % 1000 == 0)
+      std::cout << "[pairing] event " << eventsRead << " of " << totalEntries
+                << "; events with a good pair: " << goodPairEventCount << '\n';
   }
   if (reader.GetEntryStatus() != TTreeReader::kEntryBeyondEnd &&
       (maxEvents < 0 || eventsRead < maxEvents)) {
     std::cerr << "Tree reading stopped early; check branch availability/types.\n";
     return;
   }
-  std::cout << "Read " << eventsRead << " events; skipped malformed pairs: " << malformedPairs << '\n';
+  std::cout << "Read " << eventsRead << " of " << totalEntries
+            << " events; events with a good pair: " << goodPairEventCount
+            << "; skipped malformed pairs: " << malformedPairs << '\n';
 
   // Saving is opt-in; savePlots=false creates no directory or output files.
   TString outputPrefix;
