@@ -36,7 +36,8 @@
 // layer-dt min/max, ECal-dt min/max, member ToT min/max, maximum |L2-L1|,
 // maximum ECal ellipse radius, savePlots, outputDirectory, minEntriesPerBar,
 // minimum and maximum segment (both -1 means all segments), then geometry
-// display limits for x1-x2, x1, x residual, and angle.
+// display limits for x1-x2, x1, x residual, and angle, followed by the ECal
+// event adctime and energy cut limits.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
 // One event pass produces all four canvases, including geometry and the all-bar scan.
 // savePlots defaults to false. When true, save all four as PNG AND PDF plus
@@ -62,7 +63,9 @@ void PlotPairingVariables(int runNumber = 6077,
                          double xDiffMaxM = 0.5, double x1MinM = -1.6,
                          double x1MaxM = 1.6, double xResidualMinM = -0.2,
                          double xResidualMaxM = 0.2, double angleMinMrad = -100,
-                         double angleMaxMrad = 100) {
+                         double angleMaxMrad = 100, double ecalTimeMinNs = -10,
+                         double ecalTimeMaxNs = 4, double ecalEnergyMinGeV = 3.0,
+                         double ecalEnergyMaxGeV = 4.5) {
   using namespace CDetPairingPlots;
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
@@ -72,6 +75,8 @@ void PlotPairingVariables(int runNumber = 6077,
       !std::isfinite(x1MinM) || !std::isfinite(x1MaxM) || x1MaxM <= x1MinM ||
       !std::isfinite(xResidualMinM) || !std::isfinite(xResidualMaxM) || xResidualMaxM <= xResidualMinM ||
       !std::isfinite(angleMinMrad) || !std::isfinite(angleMaxMrad) || angleMaxMrad <= angleMinMrad ||
+      !std::isfinite(ecalTimeMinNs) || !std::isfinite(ecalTimeMaxNs) || ecalTimeMaxNs <= ecalTimeMinNs ||
+      !std::isfinite(ecalEnergyMinGeV) || !std::isfinite(ecalEnergyMaxGeV) || ecalEnergyMaxGeV <= ecalEnergyMinGeV ||
       selectedLayer1Bar < 0 || selectedLayer1Bar >= 84 ||
       !ValidCuts(memberToTMinNs, memberToTMaxNs, layerDTMaxNs, pairRadiusMax)) {
     std::cerr << "Invalid histogram bounds, Layer-1 bar, or cut settings.\n";
@@ -144,6 +149,8 @@ void PlotPairingVariables(int runNumber = 6077,
   TTreeReaderArray<Double_t> pairYTopology(reader, "earm.cdet.pair.y_topology");
   TTreeReaderValue<Double_t> ecalX(reader, "earm.ecal.x");
   TTreeReaderValue<Double_t> ecalY(reader, "earm.ecal.y");
+  TTreeReaderValue<Double_t> ecalTime(reader, "earm.ecal.adctime");
+  TTreeReaderValue<Double_t> ecalEnergy(reader, "earm.ecal.e");
 
 
   // 1. Define histograms before the event loop. Display bounds are not cuts.
@@ -182,10 +189,16 @@ void PlotPairingVariables(int runNumber = 6077,
 
   Long64_t eventsRead = 0, goodPairEventCount = 0, malformedPairs = 0;
   const TString cuts = CutLabel(memberToTMinNs, memberToTMaxNs, layerDTMaxNs, pairRadiusMax);
-  std::cout << cuts << "\nNo additional ECal event cut is imposed.\n";
+  std::cout << cuts << "\nECal adctime event cut: [" << ecalTimeMinNs
+            << ", " << ecalTimeMaxNs << "] ns; ECal energy cut: ["
+            << ecalEnergyMinGeV << ", " << ecalEnergyMaxGeV << "] GeV.\n";
   while ((maxEvents < 0 || eventsRead < maxEvents) && reader.Next()) {
     ++eventsRead;
     bool eventHasGoodPair = false;
+    if (!std::isfinite(*ecalTime) || *ecalTime < ecalTimeMinNs ||
+        *ecalTime > ecalTimeMaxNs || !std::isfinite(*ecalEnergy) ||
+        *ecalEnergy < ecalEnergyMinGeV || *ecalEnergy > ecalEnergyMaxGeV)
+      continue;
     const size_t nPairs = pairPixelL1.GetSize();
     if (pulsePixelID.GetSize() != pulseToT.GetSize() ||
         pulsePixelID.GetSize() != pulseECalDT.GetSize() ||
@@ -422,6 +435,8 @@ void PlotPairingVariables(const char *configFile,
     "analysis.events", "analysis.min_segment", "analysis.max_segment",
     "analysis.layer1_bar", "cuts.member_tot_min_ns",
     "cuts.member_tot_max_ns", "cuts.layer_dt_max_ns", "cuts.pair_radius_max",
+    "cuts.ecal_time_min_ns", "cuts.ecal_time_max_ns",
+    "cuts.ecal_energy_min_gev", "cuts.ecal_energy_max_gev",
     "plots.bin_width_ns", "plots.le_min_ns", "plots.le_max_ns",
     "plots.layer_dt_min_ns", "plots.layer_dt_max_ns", "plots.ecal_dt_min_ns",
     "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "plots.x_diff_min_m",
@@ -484,7 +499,9 @@ void PlotPairingVariables(const char *configFile,
         number("plots.x_diff_max_m", 0.5), number("plots.x1_min_m", -1.6),
         number("plots.x1_max_m", 1.6), number("plots.x_residual_min_m", -0.2),
         number("plots.x_residual_max_m", 0.2), number("plots.angle_min_mrad", -100),
-        number("plots.angle_max_mrad", 100));
+        number("plots.angle_max_mrad", 100), number("cuts.ecal_time_min_ns", -10),
+        number("cuts.ecal_time_max_ns", 4), number("cuts.ecal_energy_min_gev", 3.0),
+        number("cuts.ecal_energy_max_gev", 4.5));
   } catch (const std::exception &error) {
     std::cerr << "Invalid pairing configuration: " << error.what() << '\n';
   }
