@@ -63,19 +63,22 @@ void PlotPairingVariables(int runNumber = 6077,
                          int segmentMax = -1, double xDiffMinM = -0.5,
                          double xDiffMaxM = 0.5, double x1MinM = -1.6,
                          double x1MaxM = 1.6, double xResidualMinM = -0.2,
-                         double xResidualMaxM = 0.2, double angleMinMrad = -100,
-                         double angleMaxMrad = 100, double ecalTimeMinNs = -10,
+                         double xResidualMaxM = 0.2, double angleMinMrad = -60,
+                         double angleMaxMrad = 80, double angleBinWidthMrad = 5,
+                         double ecalTimeMinNs = -10,
                          double ecalTimeMaxNs = 4, double ecalEnergyMinGeV = 3.0,
                          double ecalEnergyMaxGeV = 4.5) {
   using namespace CDetPairingPlots;
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
   const int nECalDT = Bins(binWidthNs, ecalDTMinNs, ecalDTMaxNs);
+  const int nAngleBins = Bins(angleBinWidthMrad, angleMinMrad, angleMaxMrad);
   if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nDT || !nECalDT ||
       !std::isfinite(xDiffMinM) || !std::isfinite(xDiffMaxM) || xDiffMaxM <= xDiffMinM ||
       !std::isfinite(x1MinM) || !std::isfinite(x1MaxM) || x1MaxM <= x1MinM ||
       !std::isfinite(xResidualMinM) || !std::isfinite(xResidualMaxM) || xResidualMaxM <= xResidualMinM ||
       !std::isfinite(angleMinMrad) || !std::isfinite(angleMaxMrad) || angleMaxMrad <= angleMinMrad ||
+      !nAngleBins ||
       !std::isfinite(ecalTimeMinNs) || !std::isfinite(ecalTimeMaxNs) || ecalTimeMaxNs <= ecalTimeMinNs ||
       !std::isfinite(ecalEnergyMinGeV) || !std::isfinite(ecalEnergyMaxGeV) || ecalEnergyMaxGeV <= ecalEnergyMinGeV ||
       selectedLayer1Bar < 0 || selectedLayer1Bar >= 84 ||
@@ -173,7 +176,7 @@ void PlotPairingVariables(int runNumber = 6077,
       title+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
       nGeometryBins, xResidualMinM, xResidualMaxM);
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
-      title+";Out-of-plane angle (mrad);Pairs", nGeometryBins,
+      title+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
   const TString allTitle = TString::Format("Run %d, all bars", runNumber);
   TH2D hAllPairXDiffVsX1("hAllPairXDiffVsX1_"+tag,
@@ -183,7 +186,7 @@ void PlotPairingVariables(int runNumber = 6077,
       allTitle+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
       nGeometryBins, xResidualMinM, xResidualMaxM);
   TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
-      allTitle+";Out-of-plane angle (mrad);Pairs", nGeometryBins,
+      allTitle+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
   hPairXDiffVsX1.SetDirectory(nullptr);
   hPairXDiffVsX1.SetStats(false);
@@ -478,7 +481,7 @@ void PlotPairingVariables(const char *configFile,
     "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "plots.x_diff_min_m",
     "plots.x_diff_max_m", "plots.x1_min_m", "plots.x1_max_m",
     "plots.x_residual_min_m", "plots.x_residual_max_m", "plots.angle_min_mrad",
-    "plots.angle_max_mrad", "output.save_plots",
+    "plots.angle_max_mrad", "plots.angle_bin_width_mrad", "output.save_plots",
     "output.directory"
   };
   TIter next(config.GetTable());
@@ -534,8 +537,9 @@ void PlotPairingVariables(const char *configFile,
         static_cast<int>(segmentMax), number("plots.x_diff_min_m", -0.5),
         number("plots.x_diff_max_m", 0.5), number("plots.x1_min_m", -1.6),
         number("plots.x1_max_m", 1.6), number("plots.x_residual_min_m", -0.2),
-        number("plots.x_residual_max_m", 0.2), number("plots.angle_min_mrad", -100),
-        number("plots.angle_max_mrad", 100), number("cuts.ecal_time_min_ns", -10),
+        number("plots.x_residual_max_m", 0.2), number("plots.angle_min_mrad", -60),
+        number("plots.angle_max_mrad", 80), number("plots.angle_bin_width_mrad", 5),
+        number("cuts.ecal_time_min_ns", -10),
         number("cuts.ecal_time_max_ns", 4), number("cuts.ecal_energy_min_gev", 3.0),
         number("cuts.ecal_energy_max_gev", 4.5));
   } catch (const std::exception &error) {

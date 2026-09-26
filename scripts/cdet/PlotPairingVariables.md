@@ -106,8 +106,9 @@ m = \frac{\sum_i z_i y_i}{\sum_i z_i^2},
 \qquad \theta_y = \arctan(m).
 \]
 
-The displayed angle is `1000*theta_y` in mrad. This is a rough geometric
-diagnostic, not a replacement for a full track or optics reconstruction.
+The displayed angle is `1000*theta_y` in mrad. The current display range is
+`-60` to `80 mrad` with `5 mrad` bins. This is a rough geometric diagnostic,
+not a replacement for a full track or optics reconstruction.
 
 The standard deviation of the second panel is printed as a rough CDet x
 position-resolution estimate in millimeters.
