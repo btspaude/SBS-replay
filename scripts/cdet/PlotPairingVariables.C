@@ -146,7 +146,7 @@ void PlotPairingVariables(int runNumber = 6077,
   // All 168 paired-member histograms are filled before the selected-bar cut.
   std::array<std::unique_ptr<TH1D>, 168> histograms;
   for (int bar = 0; bar < 168; ++bar) {
-    histograms[bar].reset(new TH1D(TString::Format("hPairMemberDT_%s_bar%d", tag.Data(), bar), TString::Format("Run %d, global half-bar %d;t_{ECal} - t_{CDet,member} (ns);Paired members", runNumber, bar), nECalDT, ecalDTMinNs, ecalDTMaxNs));
+    histograms[bar].reset(new TH1D(TString::Format("hPairMemberDT_%s_bar%d", tag.Data(), bar), TString::Format("Run %d, global bar %d;t_{ECal} - t_{CDet,member} (ns);Paired members", runNumber, bar), nECalDT, ecalDTMinNs, ecalDTMaxNs));
     Prepare(*histograms[bar]);
   }
 
@@ -272,7 +272,7 @@ void PlotPairingVariables(int runNumber = 6077,
     layerCanvas->SaveAs(outputPrefix+"_layers.png");
   }
 
-  // 7. Third canvas: sigma versus local half-bar, both layers.
+  // 7. Third canvas: sigma versus bar number within each detector layer.
   // Graphs omit low-statistics bars; the optional CSV retains every bar/status.
   auto *g1 = new TGraphErrors();
   auto *g2 = new TGraphErrors();
@@ -310,7 +310,7 @@ void PlotPairingVariables(int runNumber = 6077,
   for (auto *g : {g1, g2})
     for (int i = 0; i < g->GetN(); ++i)
       ymax = std::max(ymax, g->GetPointY(i)+g->GetErrorY(i));
-  canvas->DrawFrame(-0.5, 0, 83.5, 1.2*ymax, TString::Format("Run %d: paired-member timing widths;Half-bar within layer;SD(t_{ECal}-t_{CDet,member}) (ns)", runNumber));
+  canvas->DrawFrame(-0.5, 0, 83.5, 1.2*ymax, TString::Format("Run %d: paired-member timing widths;Bar number within layer;SD(t_{ECal}-t_{CDet,member}) (ns)", runNumber));
   g1->SetMarkerStyle(20); g1->SetMarkerColor(kBlue+1); g1->SetLineColor(kBlue+1);
   g2->SetMarkerStyle(22); g2->SetMarkerColor(kRed+1); g2->SetLineColor(kRed+1);
   if (g1->GetN()) g1->Draw("P SAME");
