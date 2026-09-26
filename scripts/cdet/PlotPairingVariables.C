@@ -1,6 +1,7 @@
 #include <TCanvas.h>
 #include <TEnv.h>
 #include <THashList.h>
+#include <TH2D.h>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include <TSystem.h>
 #include <TTreeReader.h>
 #include <TTreeReaderArray.h>
+#include <TTreeReaderValue.h>
 
 #include <iostream>
 
@@ -33,16 +35,19 @@
 // Positional arguments after maxEvents: L1 bar, bin width, LE min/max,
 // layer-dt min/max, ECal-dt min/max, member ToT min/max, maximum |L2-L1|,
 // maximum ECal ellipse radius, savePlots, outputDirectory, minEntriesPerBar,
-// minimum and maximum segment (both -1 means all segments).
+// minimum and maximum segment (both -1 means all segments), then geometry
+// display limits for x1-x2, x1, x residual, and angle.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
-// One event pass produces all three canvases, including the all-bar scan.
-// savePlots defaults to false. When true, save all three as PNG AND PDF plus
+// One event pass produces all four canvases, including geometry and the all-bar scan.
+// savePlots defaults to false. When true, save all four as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
 // Standard deviations and their ROOT moment-based error estimates include
 // all finite selected values, including histogram tails. Tail counts are kept
 // in the CSV/terminal diagnostics but are not drawn on the thesis canvases.
 // No Gaussian fit is used. Pair/event correlations are not modeled in errors.
+// Geometry uses transport y/z for the out-of-plane angle and assumes the
+// trajectory starts at (y,z)=(0,0); the angle is a rough diagnostic only.
 void PlotPairingVariables(int runNumber = 6077,
                          const char *inputDirectory = nullptr,
                          Long64_t maxEvents = -1, int selectedLayer1Bar = 30,
@@ -53,12 +58,21 @@ void PlotPairingVariables(int runNumber = 6077,
                          double layerDTMaxNs = -1, double pairRadiusMax = -1,
                          bool savePlots = false, const char *outputDirectory = "pairing_plots",
                          int minEntriesPerBar = 30, int segmentMin = -1,
-                         int segmentMax = -1) {
+                         int segmentMax = -1, double xDiffMinM = -0.5,
+                         double xDiffMaxM = 0.5, double x1MinM = -1.6,
+                         double x1MaxM = 1.6, double xResidualMinM = -0.2,
+                         double xResidualMaxM = 0.2, double angleMinMrad = -100,
+                         double angleMaxMrad = 100) {
   using namespace CDetPairingPlots;
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
   const int nECalDT = Bins(binWidthNs, ecalDTMinNs, ecalDTMaxNs);
-  if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nDT || !nECalDT || selectedLayer1Bar < 0 || selectedLayer1Bar >= 84 ||
+  if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nDT || !nECalDT ||
+      !std::isfinite(xDiffMinM) || !std::isfinite(xDiffMaxM) || xDiffMaxM <= xDiffMinM ||
+      !std::isfinite(x1MinM) || !std::isfinite(x1MaxM) || x1MaxM <= x1MinM ||
+      !std::isfinite(xResidualMinM) || !std::isfinite(xResidualMaxM) || xResidualMaxM <= xResidualMinM ||
+      !std::isfinite(angleMinMrad) || !std::isfinite(angleMaxMrad) || angleMaxMrad <= angleMinMrad ||
+      selectedLayer1Bar < 0 || selectedLayer1Bar >= 84 ||
       !ValidCuts(memberToTMinNs, memberToTMaxNs, layerDTMaxNs, pairRadiusMax)) {
     std::cerr << "Invalid histogram bounds, Layer-1 bar, or cut settings.\n";
     return;
@@ -128,6 +142,8 @@ void PlotPairingVariables(int runNumber = 6077,
   TTreeReaderArray<Double_t> pairCDetScore(reader, "earm.cdet.pair.score");
   TTreeReaderArray<Double_t> pairECalScore(reader, "earm.cdet.pair.ecal_score"); // radius squared
   TTreeReaderArray<Double_t> pairYTopology(reader, "earm.cdet.pair.y_topology");
+  TTreeReaderValue<Double_t> ecalX(reader, "earm.ecal.x");
+  TTreeReaderValue<Double_t> ecalY(reader, "earm.ecal.y");
 
 
   // 1. Define histograms before the event loop. Display bounds are not cuts.
@@ -140,7 +156,21 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hECalPairDT("hECalPairDT_"+tag, title+";t_{ECal} - (t_{L1}+t_{L2})/2 (ns);Pairs", nECalDT, ecalDTMinNs, ecalDTMaxNs);
   TH1D hLEL1("hLEL1_"+tag, title+";Corrected member LE (ns);Pairs", nLE, leMinNs, leMaxNs);
   TH1D hLEL2("hLEL2_"+tag, title+";Corrected member LE (ns);Pairs", nLE, leMinNs, leMaxNs);
-  for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2})
+  constexpr double kECalZFromTargetM = 6.144;
+  const int nGeometryBins = 160;
+  TH2D hPairXDiffVsX1("hPairXDiffVsX1_"+tag,
+      title+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
+      xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
+  TH1D hPairXResidual("hPairXResidual_"+tag,
+      title+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
+      nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
+      title+";Out-of-plane angle (mrad);Pairs", nGeometryBins,
+      angleMinMrad, angleMaxMrad);
+  hPairXDiffVsX1.SetDirectory(nullptr);
+  hPairXDiffVsX1.SetStats(false);
+  for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
+                  &hPairXResidual, &hOutOfPlaneAngle})
     Prepare(*h);
 
   // All 168 paired-member histograms are filled before the selected-bar cut.
@@ -159,6 +189,9 @@ void PlotPairingVariables(int runNumber = 6077,
     const size_t nPairs = pairPixelL1.GetSize();
     if (pulsePixelID.GetSize() != pulseToT.GetSize() ||
         pulsePixelID.GetSize() != pulseECalDT.GetSize() ||
+        pulsePixelID.GetSize() != pulseX.GetSize() ||
+        pulsePixelID.GetSize() != pulseY.GetSize() ||
+        pulsePixelID.GetSize() != pulseZ.GetSize() ||
         pairPixelL2.GetSize() != nPairs || pairPulseIndexL1.GetSize() != nPairs || pairPulseIndexL2.GetSize() != nPairs ||
         pairLEL1.GetSize() != nPairs || pairLEL2.GetSize() != nPairs ||
         pairMeanLE.GetSize() != nPairs || pairLayerDT.GetSize() != nPairs ||
@@ -201,6 +234,27 @@ void PlotPairingVariables(int runNumber = 6077,
       hECalPairDT.Fill(pairECalDT[pair]);
       hLEL1.Fill(pairLEL1[pair]);
       hLEL2.Fill(pairLEL2[pair]);
+      if (std::isfinite(pulseX[i1]) && std::isfinite(pulseX[i2]) &&
+          std::isfinite(pulseY[i1]) && std::isfinite(pulseY[i2]) &&
+          std::isfinite(pulseZ[i1]) && std::isfinite(pulseZ[i2]) &&
+          std::isfinite(*ecalX) && std::isfinite(*ecalY) &&
+          std::fabs(kECalZFromTargetM) > 0.0) {
+        const double pairMeanZ = 0.5 * (pulseZ[i1] + pulseZ[i2]);
+        const double pairMeanX = 0.5 * (pulseX[i1] + pulseX[i2]);
+        const double projectedECalX = *ecalX * pairMeanZ / kECalZFromTargetM;
+        hPairXDiffVsX1.Fill(pulseX[i1] - pulseX[i2], pulseX[i1]);
+        hPairXResidual.Fill(pairMeanX - projectedECalX);
+
+        // Constrained least-squares slope y = m z through (0,0), CDet L1,
+        // CDet L2, and ECal. The transport-coordinate angle is atan(m).
+        const double z1 = pulseZ[i1], z2 = pulseZ[i2];
+        const double numerator = z1 * pulseY[i1] + z2 * pulseY[i2] +
+                                 kECalZFromTargetM * (*ecalY);
+        const double denominator = z1*z1 + z2*z2 +
+                                   kECalZFromTargetM*kECalZFromTargetM;
+        if (std::isfinite(projectedECalX) && denominator > 0.0)
+          hOutOfPlaneAngle.Fill(1000.0 * std::atan(numerator / denominator));
+      }
     }
     if (eventHasGoodPair)
       ++goodPairEventCount;
@@ -272,7 +326,30 @@ void PlotPairingVariables(int runNumber = 6077,
     layerCanvas->SaveAs(outputPrefix+"_layers.png");
   }
 
-  // 7. Third canvas: sigma versus bar number within each detector layer.
+  // 7. Pair geometry and rough transport-coordinate angle diagnostics.
+  Report(hPairXResidual);
+  Report(hOutOfPlaneAngle);
+  if (hPairXResidual.GetEntries() >= 2)
+    std::cout << "Rough CDet x position resolution estimate = "
+              << hPairXResidual.GetStdDev() * 1000.0 << " mm (pair residual SD).\n";
+  auto *geometryCanvas = new TCanvas("cPairGeometry_"+tag,
+      title+" | pair geometry", 1500, 500);
+  geometryCanvas->Divide(3, 1);
+  geometryCanvas->cd(1);
+  hPairXDiffVsX1.DrawCopy("COLZ");
+  geometryCanvas->cd(2);
+  hPairXResidual.DrawCopy("HIST");
+  Annotate(hPairXResidual);
+  geometryCanvas->cd(3);
+  hOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hOutOfPlaneAngle);
+  geometryCanvas->Update();
+  if (savePlots) {
+    geometryCanvas->SaveAs(outputPrefix+"_geometry.pdf");
+    geometryCanvas->SaveAs(outputPrefix+"_geometry.png");
+  }
+
+  // 8. Third canvas: sigma versus bar number within each detector layer.
   // Graphs omit low-statistics bars; the optional CSV retains every bar/status.
   auto *g1 = new TGraphErrors();
   auto *g2 = new TGraphErrors();
@@ -347,7 +424,10 @@ void PlotPairingVariables(const char *configFile,
     "cuts.member_tot_max_ns", "cuts.layer_dt_max_ns", "cuts.pair_radius_max",
     "plots.bin_width_ns", "plots.le_min_ns", "plots.le_max_ns",
     "plots.layer_dt_min_ns", "plots.layer_dt_max_ns", "plots.ecal_dt_min_ns",
-    "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "output.save_plots",
+    "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "plots.x_diff_min_m",
+    "plots.x_diff_max_m", "plots.x1_min_m", "plots.x1_max_m",
+    "plots.x_residual_min_m", "plots.x_residual_max_m", "plots.angle_min_mrad",
+    "plots.angle_max_mrad", "output.save_plots",
     "output.directory"
   };
   TIter next(config.GetTable());
@@ -400,7 +480,11 @@ void PlotPairingVariables(const char *configFile,
         number("cuts.layer_dt_max_ns", -1), number("cuts.pair_radius_max", -1),
         save != 0, config.GetValue("output.directory", "pairing_plots"),
         static_cast<int>(minimum), static_cast<int>(segmentMin),
-        static_cast<int>(segmentMax));
+        static_cast<int>(segmentMax), number("plots.x_diff_min_m", -0.5),
+        number("plots.x_diff_max_m", 0.5), number("plots.x1_min_m", -1.6),
+        number("plots.x1_max_m", 1.6), number("plots.x_residual_min_m", -0.2),
+        number("plots.x_residual_max_m", 0.2), number("plots.angle_min_mrad", -100),
+        number("plots.angle_max_mrad", 100));
   } catch (const std::exception &error) {
     std::cerr << "Invalid pairing configuration: " << error.what() << '\n';
   }
