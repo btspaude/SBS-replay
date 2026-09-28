@@ -2,6 +2,7 @@
 #include <TEnv.h>
 #include <THashList.h>
 #include <TH2D.h>
+#include <TEllipse.h>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -39,9 +40,9 @@
 // display limits for x1-x2, x1, x residual, and angle, followed by the ECal
 // event adctime and energy cut limits.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
-// One event pass produces all five canvases, including focused/all-detector
+// One event pass produces all six canvases, including focused/all-detector
 // geometry and the all-bar scan. savePlots defaults to false. When true, save
-// all five as PNG AND PDF plus
+// all six as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
 // Standard deviations and their ROOT moment-based error estimates include
@@ -187,10 +188,15 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
       allTitle+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
+  TH2D hPairEllipseBefore("hPairEllipseBefore_"+tag,
+      allTitle+";r_{x} (m);#Delta t_{pair} = t_{ECal} - <t_{CDet}>_{pair} (ns)",
+      160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
   hPairXDiffVsX1.SetDirectory(nullptr);
   hPairXDiffVsX1.SetStats(false);
   hAllPairXDiffVsX1.SetDirectory(nullptr);
   hAllPairXDiffVsX1.SetStats(false);
+  hPairEllipseBefore.SetDirectory(nullptr);
+  hPairEllipseBefore.SetStats(false);
   for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
                   &hPairXResidual, &hOutOfPlaneAngle, &hAllPairXResidual,
                   &hAllOutOfPlaneAngle})
@@ -262,10 +268,16 @@ void PlotPairingVariables(int runNumber = 6077,
       // All five histograms use exactly the same finite selected pairs.
       if (!std::isfinite(pairLEL1[pair]) || !std::isfinite(pairLEL2[pair]) ||
           !std::isfinite(pairMeanLE[pair]) || !std::isfinite(pairECalDT[pair]) ||
-          (pairRadiusMax >= 0 && !std::isfinite(pairTrajectoryResidual[pair]))) {
+          !std::isfinite(pairTrajectoryResidual[pair])) {
         ++malformedPairs;
         continue;
       }
+      // Fill the candidate population before applying the ECal trajectory-time
+      // ellipse. ToT and optional inter-layer timing cuts are still applied.
+      if (PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
+                   pairTrajectoryResidual[pair], pairECalDT[pair],
+                   memberToTMinNs, memberToTMaxNs, layerDTMaxNs, -1))
+        hPairEllipseBefore.Fill(pairTrajectoryResidual[pair], pairECalDT[pair]);
       if (!PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
                     pairTrajectoryResidual[pair], pairECalDT[pair],
                     memberToTMinNs, memberToTMaxNs, layerDTMaxNs,
@@ -402,7 +414,27 @@ void PlotPairingVariables(int runNumber = 6077,
     allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.png");
   }
 
-  // 8. Third canvas: sigma versus bar number within each detector layer.
+  // 9. Candidate pair population before the ECal trajectory-time ellipse.
+  auto *ellipseCanvas = new TCanvas("cPairEllipse_"+tag,
+      title+" | pre-ellipse pair candidates", 900, 700);
+  ellipseCanvas->SetRightMargin(0.14);
+  hPairEllipseBefore.DrawCopy("COLZ");
+  if (pairRadiusMax > 0) {
+    TEllipse ellipse(0.0, CDetPairingPlots::kPairEllipseTimingCenterNs,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTrajectoryScaleM,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTimingScaleNs);
+    ellipse.SetFillStyle(0);
+    ellipse.SetLineColor(kRed+1);
+    ellipse.SetLineWidth(3);
+    ellipse.Draw("SAME");
+  }
+  ellipseCanvas->Update();
+  if (savePlots) {
+    ellipseCanvas->SaveAs(outputPrefix+"_ellipse.pdf");
+    ellipseCanvas->SaveAs(outputPrefix+"_ellipse.png");
+  }
+
+  // 10. Third canvas: sigma versus bar number within each detector layer.
   // Graphs omit low-statistics bars; the optional CSV retains every bar/status.
   auto *g1 = new TGraphErrors();
   auto *g2 = new TGraphErrors();

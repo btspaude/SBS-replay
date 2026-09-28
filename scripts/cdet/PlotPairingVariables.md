@@ -188,6 +188,20 @@ A second, otherwise identical geometry canvas is filled before the selected
 bar restriction and therefore uses accepted pairs from all detector bars. Its
 output names end in `_geometry_all`.
 
+## Pre-ellipse diagnostic
+
+The `_ellipse` canvas shows the all-detector candidate pair population before
+the ECal trajectory-time radius cut. Its horizontal axis is the trajectory residual
+`rₓ`, and its vertical axis is
+`Δt_pair = tECal − <tCDet>pair`. The event-level ECal cuts, pair validity,
+member-ToT cut, and optional inter-layer timing cut have already been applied,
+but the pair-radius cut has not.
+
+The configured ellipse is drawn on top of the candidate population. With the
+Run 6077 settings it is centered at `(rₓ, Δt_pair) = (0 m, −26 ns)` and has
+radius-2 semiaxes of `0.040 m` and `10 ns`. This makes it possible to see
+which candidate pairs are removed by the spatial-plus-timing ellipse.
+
 ## Bar-width canvas
 
 The fourth canvas shows the standard deviation of
@@ -204,7 +218,7 @@ number of entries in the chained run files. It reports the cumulative number
 of events containing at least one pair that passes the macro’s checks and
 configured cuts.
 
-With `output.save_plots: 1`, the macro saves five thesis-ready canvases as
+With `output.save_plots: 1`, the macro saves six thesis-ready canvases as
 both PDF and PNG, plus the bar-width CSV. Files are written under
 `output.directory` with run and selected-bar names. Plot saving is disabled
 when `output.save_plots: 0`.

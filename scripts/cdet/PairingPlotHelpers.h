@@ -8,6 +8,10 @@
 #include <iostream>
 
 namespace CDetPairingPlots {
+inline constexpr double kPairEllipseTrajectoryScaleM = 0.020;
+inline constexpr double kPairEllipseTimingCenterNs = -26.0;
+inline constexpr double kPairEllipseTimingScaleNs = 5.0;
+
 inline int Bins(double width, double low, double high) {
   if (!std::isfinite(width) || !std::isfinite(low) || !std::isfinite(high) ||
       width <= 0 || high <= low || (high-low)/width > 1000000)
@@ -58,11 +62,9 @@ inline bool ValidCuts(double totMin, double totMax, double dtMax, double radius)
 
 inline double PairEllipseRadiusSquared(double trajectoryResidual,
                                        double ecalTimingResidual) {
-  constexpr double kTrajectoryScaleM = 0.020;
-  constexpr double kTimingCenterNs = -26.0;
-  constexpr double kTimingScaleNs = 5.0;
-  const double x = trajectoryResidual / kTrajectoryScaleM;
-  const double t = (ecalTimingResidual - kTimingCenterNs) / kTimingScaleNs;
+  const double x = trajectoryResidual / kPairEllipseTrajectoryScaleM;
+  const double t = (ecalTimingResidual - kPairEllipseTimingCenterNs) /
+                   kPairEllipseTimingScaleNs;
   return x*x + t*t;
 }
 
