@@ -48,9 +48,12 @@ The pair ellipse is enabled by default:
 cuts.pair_radius_max: 2
 ```
 
-The replay stores its normalized squared radius in `earm.cdet.pair.ecal_score`.
-The macro therefore accepts a pair when `pair.ecal_score <= 4`. This is the
-Run 6077 ECal trajectory-time ellipse from
+The macro explicitly recomputes the normalized radius from
+`earm.cdet.pair.trajectory_residual` and
+`earm.cdet.pair.ecal_residual`, then accepts a pair when `R^2 <= 4`. The
+replay also stores a diagnostic `earm.cdet.pair.ecal_score`; the explicit
+calculation makes the timing and trajectory terms visible and checks the same
+selection independently. This is the Run 6077 ECal trajectory-time ellipse from
 `CDet_RUN6077_PAIR_SELECTION_STUDY.md`:
 
 \[

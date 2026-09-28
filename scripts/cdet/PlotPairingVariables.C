@@ -149,7 +149,6 @@ void PlotPairingVariables(int runNumber = 6077,
   TTreeReaderArray<Double_t> pairDY(reader, "earm.cdet.pair.dy");
   TTreeReaderArray<Double_t> pairTrajectoryResidual(reader, "earm.cdet.pair.trajectory_residual");
   TTreeReaderArray<Double_t> pairCDetScore(reader, "earm.cdet.pair.score");
-  TTreeReaderArray<Double_t> pairECalScore(reader, "earm.cdet.pair.ecal_score"); // radius squared
   TTreeReaderArray<Double_t> pairYTopology(reader, "earm.cdet.pair.y_topology");
   TTreeReaderValue<Double_t> ecalX(reader, "earm.ecal.x");
   TTreeReaderValue<Double_t> ecalY(reader, "earm.ecal.y");
@@ -246,7 +245,7 @@ void PlotPairingVariables(int runNumber = 6077,
         pairPixelL2.GetSize() != nPairs || pairPulseIndexL1.GetSize() != nPairs || pairPulseIndexL2.GetSize() != nPairs ||
         pairLEL1.GetSize() != nPairs || pairLEL2.GetSize() != nPairs ||
         pairMeanLE.GetSize() != nPairs || pairLayerDT.GetSize() != nPairs ||
-        pairECalDT.GetSize() != nPairs || pairECalScore.GetSize() != nPairs) {
+        pairECalDT.GetSize() != nPairs || pairTrajectoryResidual.GetSize() != nPairs) {
       std::cerr << "Mismatched pair arrays at entry " << reader.GetCurrentEntry() << '\n';
       return;
     }
@@ -261,15 +260,18 @@ void PlotPairingVariables(int runNumber = 6077,
         ++malformedPairs;
         continue;
       }
-      if (!PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair], pairECalScore[pair],
-                    memberToTMinNs, memberToTMaxNs, layerDTMaxNs, pairRadiusMax))
-        continue;
       // All five histograms use exactly the same finite selected pairs.
       if (!std::isfinite(pairLEL1[pair]) || !std::isfinite(pairLEL2[pair]) ||
-          !std::isfinite(pairMeanLE[pair]) || !std::isfinite(pairECalDT[pair])) {
+          !std::isfinite(pairMeanLE[pair]) || !std::isfinite(pairECalDT[pair]) ||
+          (pairRadiusMax >= 0 && !std::isfinite(pairTrajectoryResidual[pair]))) {
         ++malformedPairs;
         continue;
       }
+      if (!PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
+                    pairTrajectoryResidual[pair], pairECalDT[pair],
+                    memberToTMinNs, memberToTMaxNs, layerDTMaxNs,
+                    pairRadiusMax))
+        continue;
       eventHasGoodPair = true;
       // 3. Detector-wide paired-member timing, under the same study cuts.
       // This is ECal minus each member's LE, NOT ECal minus pair-mean time.

@@ -56,12 +56,26 @@ inline bool ValidCuts(double totMin, double totMax, double dtMax, double radius)
       (radius == -1 || radius > 0);
 }
 
-inline bool PassCuts(double tot1, double tot2, double dt, double score,
+inline double PairEllipseRadiusSquared(double trajectoryResidual,
+                                       double ecalTimingResidual) {
+  constexpr double kTrajectoryScaleM = 0.020;
+  constexpr double kTimingCenterNs = -26.0;
+  constexpr double kTimingScaleNs = 5.0;
+  const double x = trajectoryResidual / kTrajectoryScaleM;
+  const double t = (ecalTimingResidual - kTimingCenterNs) / kTimingScaleNs;
+  return x*x + t*t;
+}
+
+inline bool PassCuts(double tot1, double tot2, double dt,
+                     double trajectoryResidual, double ecalTimingResidual,
                      double totMin, double totMax, double dtMax, double radius) {
   return std::isfinite(tot1) && std::isfinite(tot2) && std::isfinite(dt) &&
       tot1 >= totMin && tot1 <= totMax && tot2 >= totMin && tot2 <= totMax &&
       (dtMax < 0 || std::fabs(dt) <= dtMax) &&
-      (radius < 0 || (std::isfinite(score) && score >= 0 && score <= radius*radius));
+      (radius < 0 || (std::isfinite(trajectoryResidual) &&
+                      std::isfinite(ecalTimingResidual) &&
+                      PairEllipseRadiusSquared(trajectoryResidual,
+                                                ecalTimingResidual) <= radius*radius));
 }
 
 inline bool Index(double value, size_t size, size_t &index) {
