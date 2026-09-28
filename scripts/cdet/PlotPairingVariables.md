@@ -188,6 +188,16 @@ A second, otherwise identical geometry canvas is filled before the selected
 bar restriction and therefore uses accepted pairs from all detector bars. Its
 output names end in `_geometry_all`.
 
+The macro also writes `_geometry_xw` and `_geometry_xw_all` copies. Their
+middle panels use an ECal-guided projection from Layer 2 back to Layer 1:
+
+`xw = x2 + (xECal / zECal) × (z1 − z2)`
+
+and plot `x1 − xw`. Since
+`x1 − xw = −[(x2 − x1) − (xECal / zECal) × (z2 − z1)]`, this is the same
+trajectory residual used by the ellipse up to sign. Its standard deviation is
+also printed as a separate Layer-1 x-position estimate.
+
 ## Pre-ellipse diagnostic
 
 The `_ellipse` canvas shows the all-detector candidate pair population before
@@ -218,7 +228,7 @@ number of entries in the chained run files. It reports the cumulative number
 of events containing at least one pair that passes the macro’s checks and
 configured cuts.
 
-With `output.save_plots: 1`, the macro saves six thesis-ready canvases as
+With `output.save_plots: 1`, the macro saves eight thesis-ready canvases as
 both PDF and PNG, plus the bar-width CSV. Files are written under
 `output.directory` with run and selected-bar names. Plot saving is disabled
 when `output.save_plots: 0`.

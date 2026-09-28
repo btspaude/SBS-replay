@@ -40,9 +40,9 @@
 // display limits for x1-x2, x1, x residual, and angle, followed by the ECal
 // event adctime and energy cut limits.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
-// One event pass produces all six canvases, including focused/all-detector
+// One event pass produces all eight canvases, including focused/all-detector
 // geometry and the all-bar scan. savePlots defaults to false. When true, save
-// all six as PNG AND PDF plus
+// all eight as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
 // Standard deviations and their ROOT moment-based error estimates include
@@ -175,6 +175,9 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hPairXResidual("hPairXResidual_"+tag,
       title+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
       nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hPairX1MinusXw("hPairX1MinusXw_"+tag,
+      title+";x_{1} - x_{w} (m);Pairs", nGeometryBins,
+      xResidualMinM, xResidualMaxM);
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
       title+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
@@ -185,6 +188,9 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hAllPairXResidual("hAllPairXResidual_"+tag,
       allTitle+";<x>_{CDet,pair} - x_{ECal projected} (m);Pairs",
       nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hAllPairX1MinusXw("hAllPairX1MinusXw_"+tag,
+      allTitle+";x_{1} - x_{w} (m);Pairs", nGeometryBins,
+      xResidualMinM, xResidualMaxM);
   TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
       allTitle+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
@@ -198,12 +204,14 @@ void PlotPairingVariables(int runNumber = 6077,
   hPairEllipseBefore.SetDirectory(nullptr);
   hPairEllipseBefore.SetStats(false);
   for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
-                  &hPairXResidual, &hOutOfPlaneAngle, &hAllPairXResidual,
+                  &hPairXResidual, &hPairX1MinusXw, &hOutOfPlaneAngle,
+                  &hAllPairXResidual, &hAllPairX1MinusXw,
                   &hAllOutOfPlaneAngle})
     Prepare(*h);
 
   auto fillGeometry = [&](TH2D &xDiffVsX1, TH1D &xResidual,
-                          TH1D &outOfPlaneAngle, size_t i1, size_t i2) {
+                          TH1D &x1MinusXw, TH1D &outOfPlaneAngle,
+                          size_t i1, size_t i2) {
     if (!std::isfinite(pulseX[i1]) || !std::isfinite(pulseX[i2]) ||
         !std::isfinite(pulseZ[i1]) || !std::isfinite(pulseZ[i2]) ||
         !std::isfinite(*ecalX))
@@ -211,8 +219,11 @@ void PlotPairingVariables(int runNumber = 6077,
     const double pairMeanZ = 0.5 * (pulseZ[i1] + pulseZ[i2]);
     const double pairMeanX = 0.5 * (pulseX[i1] + pulseX[i2]);
     const double projectedECalX = *ecalX * pairMeanZ / kECalZFromTargetM;
+    const double deltaZ = pulseZ[i1] - pulseZ[i2];
+    const double xw = pulseX[i2] + (*ecalX / kECalZFromTargetM) * deltaZ;
     xDiffVsX1.Fill(pulseX[i1] - pulseX[i2], pulseX[i1]);
     xResidual.Fill(pairMeanX - projectedECalX);
+    x1MinusXw.Fill(pulseX[i1] - xw);
     const double z1 = pulseZ[i1], z2 = pulseZ[i2];
     const double numerator = z1 * pulseX[i1] + z2 * pulseX[i2] +
                              kECalZFromTargetM * (*ecalX);
@@ -291,7 +302,7 @@ void PlotPairingVariables(int runNumber = 6077,
       // Geometry diagnostics are filled for every accepted pair before the
       // selected-bar restriction, so the all-detector canvas is independent
       // of the focused bar.
-      fillGeometry(hAllPairXDiffVsX1, hAllPairXResidual,
+      fillGeometry(hAllPairXDiffVsX1, hAllPairXResidual, hAllPairX1MinusXw,
                    hAllOutOfPlaneAngle, i1, i2);
 
       // Only the first two canvases restrict the Layer-1 bar.
@@ -303,7 +314,8 @@ void PlotPairingVariables(int runNumber = 6077,
       hECalPairDT.Fill(pairECalDT[pair]);
       hLEL1.Fill(pairLEL1[pair]);
       hLEL2.Fill(pairLEL2[pair]);
-      fillGeometry(hPairXDiffVsX1, hPairXResidual, hOutOfPlaneAngle, i1, i2);
+      fillGeometry(hPairXDiffVsX1, hPairXResidual, hPairX1MinusXw,
+                   hOutOfPlaneAngle, i1, i2);
     }
     if (eventHasGoodPair)
       ++goodPairEventCount;
@@ -414,7 +426,46 @@ void PlotPairingVariables(int runNumber = 6077,
     allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.png");
   }
 
-  // 9. Candidate pair population before the ECal trajectory-time ellipse.
+  // Alternative geometry canvases: use the ECal-guided Layer-2-to-Layer-1
+  // projection x_w, which is the trajectory residual up to a sign.
+  Report(hPairX1MinusXw);
+  if (hPairX1MinusXw.GetEntries() >= 2)
+    std::cout << "Rough Layer-1 x resolution estimate from x1-xw = "
+              << hPairX1MinusXw.GetStdDev() * 1000.0 << " mm.\n";
+  auto *xwGeometryCanvas = new TCanvas("cPairGeometryXw_"+tag,
+      title+" | x1-xw geometry", 1500, 500);
+  xwGeometryCanvas->Divide(3, 1);
+  xwGeometryCanvas->cd(1);
+  hPairXDiffVsX1.DrawCopy("COLZ");
+  xwGeometryCanvas->cd(2);
+  hPairX1MinusXw.DrawCopy("HIST");
+  Annotate(hPairX1MinusXw);
+  xwGeometryCanvas->cd(3);
+  hOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hOutOfPlaneAngle);
+  xwGeometryCanvas->Update();
+  if (savePlots) {
+    xwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw.pdf");
+    xwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw.png");
+  }
+  auto *allXwGeometryCanvas = new TCanvas("cAllPairGeometryXw_"+tag,
+      allTitle+" | x1-xw geometry", 1500, 500);
+  allXwGeometryCanvas->Divide(3, 1);
+  allXwGeometryCanvas->cd(1);
+  hAllPairXDiffVsX1.DrawCopy("COLZ");
+  allXwGeometryCanvas->cd(2);
+  hAllPairX1MinusXw.DrawCopy("HIST");
+  Annotate(hAllPairX1MinusXw);
+  allXwGeometryCanvas->cd(3);
+  hAllOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hAllOutOfPlaneAngle);
+  allXwGeometryCanvas->Update();
+  if (savePlots) {
+    allXwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw_all.pdf");
+    allXwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw_all.png");
+  }
+
+  // 11. Candidate pair population before the ECal trajectory-time ellipse.
   auto *ellipseCanvas = new TCanvas("cPairEllipse_"+tag,
       title+" | pre-ellipse pair candidates", 900, 700);
   ellipseCanvas->SetRightMargin(0.14);
@@ -434,7 +485,7 @@ void PlotPairingVariables(int runNumber = 6077,
     ellipseCanvas->SaveAs(outputPrefix+"_ellipse.png");
   }
 
-  // 10. Third canvas: sigma versus bar number within each detector layer.
+  // 12. Third canvas: sigma versus bar number within each detector layer.
   // Graphs omit low-statistics bars; the optional CSV retains every bar/status.
   auto *g1 = new TGraphErrors();
   auto *g2 = new TGraphErrors();
