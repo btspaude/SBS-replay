@@ -48,7 +48,7 @@
 // all finite selected values, including histogram tails. Tail counts are kept
 // in the CSV/terminal diagnostics but are not drawn on the thesis canvases.
 // No Gaussian fit is used. Pair/event correlations are not modeled in errors.
-// Geometry uses transport y/z for the out-of-plane angle and assumes the
+// Geometry uses transport x/z for the out-of-plane angle and assumes the
 // trajectory starts at (y,z)=(0,0); the angle is a rough diagnostic only.
 void PlotPairingVariables(int runNumber = 6077,
                          const char *inputDirectory = nullptr,
@@ -199,9 +199,8 @@ void PlotPairingVariables(int runNumber = 6077,
   auto fillGeometry = [&](TH2D &xDiffVsX1, TH1D &xResidual,
                           TH1D &outOfPlaneAngle, size_t i1, size_t i2) {
     if (!std::isfinite(pulseX[i1]) || !std::isfinite(pulseX[i2]) ||
-        !std::isfinite(pulseY[i1]) || !std::isfinite(pulseY[i2]) ||
         !std::isfinite(pulseZ[i1]) || !std::isfinite(pulseZ[i2]) ||
-        !std::isfinite(*ecalX) || !std::isfinite(*ecalY))
+        !std::isfinite(*ecalX))
       return;
     const double pairMeanZ = 0.5 * (pulseZ[i1] + pulseZ[i2]);
     const double pairMeanX = 0.5 * (pulseX[i1] + pulseX[i2]);
@@ -209,8 +208,8 @@ void PlotPairingVariables(int runNumber = 6077,
     xDiffVsX1.Fill(pulseX[i1] - pulseX[i2], pulseX[i1]);
     xResidual.Fill(pairMeanX - projectedECalX);
     const double z1 = pulseZ[i1], z2 = pulseZ[i2];
-    const double numerator = z1 * pulseY[i1] + z2 * pulseY[i2] +
-                             kECalZFromTargetM * (*ecalY);
+    const double numerator = z1 * pulseX[i1] + z2 * pulseX[i2] +
+                             kECalZFromTargetM * (*ecalX);
     const double denominator = z1*z1 + z2*z2 +
                                kECalZFromTargetM*kECalZFromTargetM;
     if (denominator > 0.0)
