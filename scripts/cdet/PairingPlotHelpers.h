@@ -45,11 +45,24 @@ inline TString WidthLabel(const TH1D &h, const char *unit = "ns") {
 }
 
 inline void Annotate(const TH1D &h, const char *unit = "ns") {
-  auto *box = new TPaveText(0.48, 0.71, 0.89, 0.89, "NDC");
+  auto *box = new TPaveText(0.62, 0.76, 0.91, 0.88, "NDC");
   box->SetFillColor(0);
   box->SetBorderSize(0);
+  box->SetMargin(0.03);
+  box->SetTextSize(0.022);
   box->AddText(TString::Format("N = %.0f", h.GetEntries()));
   box->AddText(WidthLabel(h, unit));
+  box->Draw();
+}
+
+inline void CutBox(const TString &pairCuts, const TString &eventCuts) {
+  auto *box = new TPaveText(0.55, 0.90, 0.98, 0.995, "NDC");
+  box->SetFillColor(0);
+  box->SetBorderSize(0);
+  box->SetMargin(0.02);
+  box->SetTextSize(0.016);
+  box->AddText(pairCuts);
+  box->AddText(eventCuts);
   box->Draw();
 }
 

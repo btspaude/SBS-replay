@@ -15,14 +15,20 @@ From ROOT, load the macro and use the TEnv-style configuration file:
 PlotPairingVariables("PlotPairingVariables.conf");
 ```
 
-The input directory can be overridden in the second argument:
+An empty `analysis.input_directory` uses `OUT_DIR`. The input directory can be
+overridden in the second argument:
 
 ```cpp
 PlotPairingVariables("PlotPairingVariables.conf", "/path/to/Rootfiles");
 ```
 
-The configuration selects the run, event limit, segment range, Layer-1 bar,
-cuts, histogram ranges, and output behavior. `analysis.min_segment` and
+The configuration selects the run, event limit, segment range, Layer-1 pixel,
+cuts, histogram ranges, and output behavior. `analysis.layer1_pixel` is a
+zero-based Layer-1 logical pixel ID; its containing 16-channel bar is derived
+automatically. The supplied configuration uses `-1`, which selects all 16
+pixels in `analysis.layer1_bar` (bar 30 by default). In that mode, the macro
+accepts Layer-1 pixel IDs from `16*bar` through `16*bar+15`. Set
+`analysis.layer1_pixel` to a pixel ID for a pixel-specific study. `analysis.min_segment` and
 `analysis.max_segment` set an inclusive segment range. Set both to `-1` to use
 all available segments. The dataset helper groups rollover parts and chains
 all matching segment files.
@@ -42,13 +48,13 @@ pixel identities, finite timing values, and the pulse-to-pair array sizes. The
 configured member ToT interval is inclusive for both pulses. The current
 Run-6077 configuration uses `8 <= ToT <= 35 ns`.
 
-The existing upper row of the plots uses every stored pair that passes the
-configured study cuts. The lower row is an event-level best-pair view. For
+The existing upper row of the focused plots uses every stored pair whose
+Layer-1 member matches the selected pixel and that passes the configured study
+cuts. The lower row is an event-level best-pair view. For
 each ECal-admitted event, the macro chooses the accepted pair with the smallest
 `earm.cdet.pair.ecal_score`. If that branch is nonfinite, it uses the explicitly
-recomputed ellipse radius squared as the ranking value. The focused bar plots
-choose the best accepted pair among candidates whose Layer-1 bar is the
-requested bar; the all-detector geometry plots choose the best accepted pair
+recomputed ellipse radius squared as the ranking value. The focused plots choose the best accepted pair among candidates whose Layer-1
+pixel is the requested pixel; the all-detector geometry plots choose the best accepted pair
 anywhere in the detector. This produces one pair per event for the best-pair
 row, while preserving the all-pair population above it.
 
@@ -89,7 +95,7 @@ selections already applied upstream when the ROOT file was produced.
 ## Timing canvases
 
 The first canvas contains two rows of three spectra for the selected Layer-1
-bar. The upper row contains every accepted pair and the lower row contains the
+pixel. The upper row contains every accepted pair and the lower row contains the
 best accepted pair per event:
 
 1. Stored pair-mean corrected LE, `(tL1 + tL2)/2`.
@@ -100,22 +106,36 @@ The lower row has the same three quantities after the best-pair ranking.
 
 The second canvas has two rows. Each row overlays the corrected LE spectra for
 the Layer-1 member and its Layer-2 partner. The upper row uses all accepted
-pairs; the lower row uses the best pair per event for the selected Layer-1 bar.
+pairs; the lower row uses the best pair per event for the selected Layer-1 pixel.
 The macro reports the full-sample standard deviation and its ROOT moment-based
 error; it does not perform a Gaussian fit.
 
 Timing annotations and terminal summaries are labeled in ns. Position-residual
 annotations are labeled in m, and out-of-plane angle annotations are labeled in
 degrees. This avoids applying the timing unit to the geometry panels.
+The `N` and standard-deviation boxes are intentionally compact. Each canvas
+also includes a small two-line cut box showing the stored-pair ToT, optional
+layer-dt, pair-radius, ECal adctime, and ECal energy selections.
 
 The current display range for the ECal pair residual is `-40` to `0 ns`. This
 is a display range, while the ellipse uses the residual centered near `-26 ns`.
+The focused-pixel LE spectra use `plots.bar_le_min_ns` and
+`plots.bar_le_max_ns`. The focused x1-versus-x1-x2 panels use
+`plots.bar_x1_min_m` and `plots.bar_x1_max_m`. These ranges are separate from
+the detector-wide LE and x1 ranges because their peak locations can move with
+pixel or bar position. Layer timing, ECal-pair timing, pair-position residuals,
+CDet delta-x residuals, and angle plots retain the detector-wide ranges because their peak
+locations should be comparable across the detector.
+
+The older `plots.le_min_ns` and `plots.le_max_ns` keys remain accepted for
+compatibility with the positional interface. When using the configuration
+interface, use the `plots.bar_le_*` keys for the focused LE panels.
 
 ## Pair geometry canvases
 
 The focused geometry canvas has two rows of three panels. The upper row uses
-all accepted pairs from the selected Layer-1 bar; the lower row uses the best
-accepted pair per event for that bar. Each row contains:
+all accepted pairs from the selected Layer-1 pixel; the lower row uses the best
+accepted pair per event for that pixel. Each row contains:
 
 1. A two-dimensional plot with `x1 - x2` on the horizontal axis and `x1` on
    the vertical axis.
@@ -214,15 +234,15 @@ selected-bar restriction and therefore uses all accepted pairs in the detector
 in its upper row and the best accepted pair per event in its lower row. Its
 output names end in `_geometry_all`.
 
-The macro also writes two-row `_geometry_xw` and `_geometry_xw_all` copies.
-Their middle panels use an ECal-guided projection from Layer 2 back to Layer 1:
+The macro also writes two-row `_geometry_residual` and `_geometry_residual_all` copies.
+Their middle panels use the CDet separation residual, defined directly as
 
-`xw = x2 + (xECal / zECal) × (z1 − z2)`
+`x_residual = Δx_CDet − (xECal / zECal) × Δz_CDet`
 
-and plot `x1 − xw`. Since
-`x1 − xw = −[(x2 − x1) − (xECal / zECal) × (z2 − z1)]`, this is the same
-trajectory residual used by the ellipse up to sign. Its standard deviation is
-also printed as a separate Layer-1 x-position estimate.
+with `Δx_CDet = x1 − x2` and `Δz_CDet = z1 − z2`. This is the ECal-guided
+trajectory residual used by the ellipse, with the same sign convention as the
+macro. Its standard deviation is printed as a separate Layer-1 x-position
+estimate.
 
 ## Pre-ellipse diagnostic
 
@@ -259,5 +279,5 @@ configured cuts.
 
 With `output.save_plots: 1`, the macro saves eight thesis-ready canvases as
 both PDF and PNG, plus the bar-width CSV. Files are written under
-`output.directory` with run and selected-bar names. Plot saving is disabled
-when `output.save_plots: 0`.
+`output.directory` with run, containing-bar, and selected-pixel names when a
+pixel is selected. Plot saving is disabled when `output.save_plots: 0`.
