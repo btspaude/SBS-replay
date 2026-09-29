@@ -41,7 +41,8 @@
 // minimum and maximum segment (both -1 means all segments), then geometry
 // display limits for x1-x2, x1, x residual, and angle, followed by the ECal
 // event adctime and energy cut limits.
-// The final focused-display limits are barLeMin/Max and barX1Min/Max; the
+// The final focused-display limits are barLeMin/Max, barX1Min/Max, and
+// barAngleMin/Max; the
 // final selectedLayer1Pixel is a zero-based Layer-1 pixel ID (-1 keeps the
 // legacy whole-bar selection).
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
@@ -80,6 +81,7 @@ void PlotPairingVariables(int runNumber = 6077,
                          double ecalEnergyMaxGeV = 4.5,
                          double barLeMinNs = 0, double barLeMaxNs = 60,
                          double barX1MinM = -1.6, double barX1MaxM = 1.6,
+                         double barAngleMinDeg = -40, double barAngleMaxDeg = 40,
                          int selectedLayer1Pixel = -1) {
   using namespace CDetPairingPlots;
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
@@ -87,11 +89,13 @@ void PlotPairingVariables(int runNumber = 6077,
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
   const int nECalDT = Bins(binWidthNs, ecalDTMinNs, ecalDTMaxNs);
   const int nAngleBins = Bins(angleBinWidthDeg, angleMinDeg, angleMaxDeg);
-  if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nBarLE || !nDT || !nECalDT ||
+  const int nBarAngleBins = Bins(angleBinWidthDeg, barAngleMinDeg, barAngleMaxDeg);
+  if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nBarLE || !nDT || !nECalDT || !nBarAngleBins ||
       !std::isfinite(xDiffMinM) || !std::isfinite(xDiffMaxM) || xDiffMaxM <= xDiffMinM ||
       !std::isfinite(x1MinM) || !std::isfinite(x1MaxM) || x1MaxM <= x1MinM ||
       !std::isfinite(barLeMinNs) || !std::isfinite(barLeMaxNs) || barLeMaxNs <= barLeMinNs ||
       !std::isfinite(barX1MinM) || !std::isfinite(barX1MaxM) || barX1MaxM <= barX1MinM ||
+      !std::isfinite(barAngleMinDeg) || !std::isfinite(barAngleMaxDeg) || barAngleMaxDeg <= barAngleMinDeg ||
       !std::isfinite(xResidualMinM) || !std::isfinite(xResidualMaxM) || xResidualMaxM <= xResidualMinM ||
       !std::isfinite(angleMinDeg) || !std::isfinite(angleMaxDeg) || angleMaxDeg <= angleMinDeg ||
       !nAngleBins ||
@@ -203,8 +207,8 @@ void PlotPairingVariables(int runNumber = 6077,
       title+";#Delta x_{CDet} - x_{ECal projection} (m);Pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
-      title+";Out-of-plane angle (degrees);Pairs", nAngleBins,
-      angleMinDeg, angleMaxDeg);
+      title+";Out-of-plane angle (degrees);Pairs", nBarAngleBins,
+      barAngleMinDeg, barAngleMaxDeg);
   TH2D hBestPairXDiffVsX1("hBestPairXDiffVsX1_"+tag,
       title+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
       xDiffMaxM, nGeometryBins, barX1MinM, barX1MaxM);
@@ -215,8 +219,8 @@ void PlotPairingVariables(int runNumber = 6077,
       title+";#Delta x_{CDet} - x_{ECal projection} (m);Best pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hBestOutOfPlaneAngle("hBestOutOfPlaneAngle_"+tag,
-      title+";Out-of-plane angle (degrees);Best pairs", nAngleBins,
-      angleMinDeg, angleMaxDeg);
+      title+";Out-of-plane angle (degrees);Best pairs", nBarAngleBins,
+      barAngleMinDeg, barAngleMaxDeg);
   TH1D hBestPairMeanLE("hBestPairMeanLE_"+tag,
       title+";Corrected best-pair mean LE (ns);Best pair per event", nBarLE, barLeMinNs, barLeMaxNs);
   TH1D hBestLayerDT("hBestLayerDT_"+tag,
@@ -832,6 +836,7 @@ void PlotPairingVariables(const char *configFile,
     "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "plots.x_diff_min_m",
     "plots.x_diff_max_m", "plots.x1_min_m", "plots.x1_max_m",
     "plots.bar_x1_min_m", "plots.bar_x1_max_m",
+    "plots.bar_angle_min_deg", "plots.bar_angle_max_deg",
     "plots.x_residual_min_m", "plots.x_residual_max_m", "plots.angle_min_deg",
     "plots.angle_max_deg", "plots.angle_bin_width_deg", "output.save_plots",
     "output.directory"
@@ -898,6 +903,7 @@ void PlotPairingVariables(const char *configFile,
         number("cuts.ecal_energy_max_gev", 4.5),
         number("plots.bar_le_min_ns", 0), number("plots.bar_le_max_ns", 60),
         number("plots.bar_x1_min_m", -1.6), number("plots.bar_x1_max_m", 1.6),
+        number("plots.bar_angle_min_deg", -40), number("plots.bar_angle_max_deg", 40),
         static_cast<int>(pixel));
   } catch (const std::exception &error) {
     std::cerr << "Invalid pairing configuration: " << error.what() << '\n';

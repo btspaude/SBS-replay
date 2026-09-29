@@ -127,6 +127,10 @@ pixel or bar position. Layer timing, ECal-pair timing, pair-position residuals,
 CDet delta-x residuals, and angle plots retain the detector-wide ranges because their peak
 locations should be comparable across the detector.
 
+The focused-bar out-of-plane angle panels use `plots.bar_angle_min_deg` and
+`plots.bar_angle_max_deg`. The all-detector angle panels use
+`plots.angle_min_deg` and `plots.angle_max_deg`.
+
 The older `plots.le_min_ns` and `plots.le_max_ns` keys remain accepted for
 compatibility with the positional interface. When using the configuration
 interface, use the `plots.bar_le_*` keys for the focused LE panels.
@@ -216,8 +220,9 @@ the ECal x coordinate are finite and the denominator
 averaged for this angle; both measurements enter the fit separately, along
 with the ECal point.
 
-The displayed angle is `theta_x` in degrees. The current display range is
-`-40` to `40 degrees` with `0.1 degree` bins. This is a rough geometric diagnostic,
+The displayed angle is `theta_x` in degrees. The supplied focused-bar and
+detector-wide display ranges are both `-40` to `40 degrees` with `0.1 degree`
+bins, but they are configured independently. This is a rough geometric diagnostic,
 not a replacement for a full track or optics reconstruction. It does not use
 uncertainties or perform a weighted fit, does not account for magnetic
 transport or detector alignment, and does not fit a free vertex. A nonzero
