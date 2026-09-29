@@ -12,6 +12,8 @@
 #include <fstream>
 #include <memory>
 #include <algorithm>
+#include <vector>
+#include <limits>
 #include <TChain.h>
 #include <TString.h>
 #include <TSystem.h>
@@ -41,10 +43,14 @@
 // event adctime and energy cut limits.
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
 // One event pass produces all eight canvases, including focused/all-detector
-// geometry and the all-bar scan. savePlots defaults to false. When true, save
-// all eight as PNG AND PDF plus
+// geometry and the all-bar scan. The upper row is the existing all-pair
+// population; the lower row contains one best pair per event. savePlots
+// defaults to false. When true, save all eight as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
 // These tighten the STORED pair population; they do not rerun assignment.
+// The best-pair row chooses the accepted pair with the smallest
+// pair.ecal_score in each event (falling back to the explicitly recomputed
+// ellipse radius when that diagnostic score is nonfinite).
 // Standard deviations and their ROOT moment-based error estimates include
 // all finite selected values, including histogram tails. Tail counts are kept
 // in the CSV/terminal diagnostics but are not drawn on the thesis canvases.
@@ -149,6 +155,7 @@ void PlotPairingVariables(int runNumber = 6077,
   TTreeReaderArray<Double_t> pairDX(reader, "earm.cdet.pair.dx");
   TTreeReaderArray<Double_t> pairDY(reader, "earm.cdet.pair.dy");
   TTreeReaderArray<Double_t> pairTrajectoryResidual(reader, "earm.cdet.pair.trajectory_residual");
+  TTreeReaderArray<Double_t> pairECalScore(reader, "earm.cdet.pair.ecal_score");
   TTreeReaderArray<Double_t> pairCDetScore(reader, "earm.cdet.pair.score");
   TTreeReaderArray<Double_t> pairYTopology(reader, "earm.cdet.pair.y_topology");
   TTreeReaderValue<Double_t> ecalX(reader, "earm.ecal.x");
@@ -181,6 +188,28 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
       title+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
+  TH2D hBestPairXDiffVsX1("hBestPairXDiffVsX1_"+tag,
+      title+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
+      xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
+  TH1D hBestPairXResidual("hBestPairXResidual_"+tag,
+      title+";<x>_{CDet,best pair} - x_{ECal projected} (m);Best pairs",
+      nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hBestPairX1MinusXw("hBestPairX1MinusXw_"+tag,
+      title+";x_{1} - x_{w} (m);Best pairs", nGeometryBins,
+      xResidualMinM, xResidualMaxM);
+  TH1D hBestOutOfPlaneAngle("hBestOutOfPlaneAngle_"+tag,
+      title+";Out-of-plane angle (mrad);Best pairs", nAngleBins,
+      angleMinMrad, angleMaxMrad);
+  TH1D hBestPairMeanLE("hBestPairMeanLE_"+tag,
+      title+";Corrected best-pair mean LE (ns);Best pair per event", nLE, leMinNs, leMaxNs);
+  TH1D hBestLayerDT("hBestLayerDT_"+tag,
+      title+";t_{L2} - t_{L1} (ns);Best pair per event", nDT, dtMinNs, dtMaxNs);
+  TH1D hBestECalPairDT("hBestECalPairDT_"+tag,
+      title+";t_{ECal} - (t_{L1}+t_{L2})/2 (ns);Best pair per event", nECalDT, ecalDTMinNs, ecalDTMaxNs);
+  TH1D hBestLEL1("hBestLEL1_"+tag,
+      title+";Corrected best-pair member LE (ns);Best pairs", nLE, leMinNs, leMaxNs);
+  TH1D hBestLEL2("hBestLEL2_"+tag,
+      title+";Corrected best-pair member LE (ns);Best pairs", nLE, leMinNs, leMaxNs);
   const TString allTitle = TString::Format("Run %d, all bars", runNumber);
   TH2D hAllPairXDiffVsX1("hAllPairXDiffVsX1_"+tag,
       allTitle+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
@@ -194,20 +223,46 @@ void PlotPairingVariables(int runNumber = 6077,
   TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
       allTitle+";Out-of-plane angle (mrad);Pairs", nAngleBins,
       angleMinMrad, angleMaxMrad);
+  TH2D hBestAllPairXDiffVsX1("hBestAllPairXDiffVsX1_"+tag,
+      allTitle+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
+      xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
+  TH1D hBestAllPairXResidual("hBestAllPairXResidual_"+tag,
+      allTitle+";<x>_{CDet,best pair} - x_{ECal projected} (m);Best pairs",
+      nGeometryBins, xResidualMinM, xResidualMaxM);
+  TH1D hBestAllPairX1MinusXw("hBestAllPairX1MinusXw_"+tag,
+      allTitle+";x_{1} - x_{w} (m);Best pairs", nGeometryBins,
+      xResidualMinM, xResidualMaxM);
+  TH1D hBestAllOutOfPlaneAngle("hBestAllOutOfPlaneAngle_"+tag,
+      allTitle+";Out-of-plane angle (mrad);Best pairs", nAngleBins,
+      angleMinMrad, angleMaxMrad);
   TH2D hPairEllipseBefore("hPairEllipseBefore_"+tag,
+      allTitle+";r_{x} (m);#Delta t_{pair} = t_{ECal} - <t_{CDet}>_{pair} (ns)",
+      160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
+  TH2D hPairEllipseBest("hPairEllipseBest_"+tag,
       allTitle+";r_{x} (m);#Delta t_{pair} = t_{ECal} - <t_{CDet}>_{pair} (ns)",
       160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
   hPairXDiffVsX1.SetDirectory(nullptr);
   hPairXDiffVsX1.SetStats(false);
+  hBestPairXDiffVsX1.SetDirectory(nullptr);
+  hBestPairXDiffVsX1.SetStats(false);
   hAllPairXDiffVsX1.SetDirectory(nullptr);
   hAllPairXDiffVsX1.SetStats(false);
   hPairEllipseBefore.SetDirectory(nullptr);
   hPairEllipseBefore.SetStats(false);
+  hPairEllipseBest.SetDirectory(nullptr);
+  hPairEllipseBest.SetStats(false);
   for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
+                  &hBestPairMeanLE, &hBestLayerDT, &hBestECalPairDT,
+                  &hBestLEL1, &hBestLEL2,
                   &hPairXResidual, &hPairX1MinusXw, &hOutOfPlaneAngle,
-                  &hAllPairXResidual, &hAllPairX1MinusXw,
-                  &hAllOutOfPlaneAngle})
+                  &hBestPairXResidual, &hBestPairX1MinusXw,
+                  &hBestOutOfPlaneAngle,
+                  &hAllPairXResidual, &hAllPairX1MinusXw, &hAllOutOfPlaneAngle,
+                  &hBestAllPairXResidual, &hBestAllPairX1MinusXw,
+                  &hBestAllOutOfPlaneAngle})
     Prepare(*h);
+  hBestAllPairXDiffVsX1.SetDirectory(nullptr);
+  hBestAllPairXDiffVsX1.SetStats(false);
 
   auto fillGeometry = [&](TH2D &xDiffVsX1, TH1D &xResidual,
                           TH1D &x1MinusXw, TH1D &outOfPlaneAngle,
@@ -235,9 +290,12 @@ void PlotPairingVariables(int runNumber = 6077,
 
   // All 168 paired-member histograms are filled before the selected-bar cut.
   std::array<std::unique_ptr<TH1D>, 168> histograms;
+  std::array<std::unique_ptr<TH1D>, 168> bestHistograms;
   for (int bar = 0; bar < 168; ++bar) {
     histograms[bar].reset(new TH1D(TString::Format("hPairMemberDT_%s_bar%d", tag.Data(), bar), TString::Format("Run %d, global bar %d;t_{ECal} - t_{CDet,member} (ns);Paired members", runNumber, bar), nECalDT, ecalDTMinNs, ecalDTMaxNs));
     Prepare(*histograms[bar]);
+    bestHistograms[bar].reset(new TH1D(TString::Format("hBestPairMemberDT_%s_bar%d", tag.Data(), bar), TString::Format("Run %d, global bar %d; t_{ECal} - t_{CDet,member} (ns);Best pairs", runNumber, bar), nECalDT, ecalDTMinNs, ecalDTMaxNs));
+    Prepare(*bestHistograms[bar]);
   }
 
   Long64_t eventsRead = 0, goodPairEventCount = 0, malformedPairs = 0;
@@ -261,10 +319,17 @@ void PlotPairingVariables(int runNumber = 6077,
         pairPixelL2.GetSize() != nPairs || pairPulseIndexL1.GetSize() != nPairs || pairPulseIndexL2.GetSize() != nPairs ||
         pairLEL1.GetSize() != nPairs || pairLEL2.GetSize() != nPairs ||
         pairMeanLE.GetSize() != nPairs || pairLayerDT.GetSize() != nPairs ||
-        pairECalDT.GetSize() != nPairs || pairTrajectoryResidual.GetSize() != nPairs) {
+        pairECalDT.GetSize() != nPairs || pairTrajectoryResidual.GetSize() != nPairs ||
+        pairECalScore.GetSize() != nPairs) {
       std::cerr << "Mismatched pair arrays at entry " << reader.GetCurrentEntry() << '\n';
       return;
     }
+    struct PairCandidate {
+      size_t pair = 0, i1 = 0, i2 = 0, id1 = 0, id2 = 0;
+      double rank = std::numeric_limits<double>::infinity();
+    };
+    std::vector<PairCandidate> preEllipseCandidates;
+    std::vector<PairCandidate> acceptedCandidates;
     for (size_t pair = 0; pair < nPairs; ++pair) {
       // 2. Validate member references and apply common cuts to all bars.
       size_t i1, i2, id1, id2;
@@ -285,16 +350,29 @@ void PlotPairingVariables(int runNumber = 6077,
       }
       // Fill the candidate population before applying the ECal trajectory-time
       // ellipse. ToT and optional inter-layer timing cuts are still applied.
-      if (PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
-                   pairTrajectoryResidual[pair], pairECalDT[pair],
-                   memberToTMinNs, memberToTMaxNs, layerDTMaxNs, -1))
+      const bool passesPreEllipse = PassCuts(
+          pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
+          pairTrajectoryResidual[pair], pairECalDT[pair],
+          memberToTMinNs, memberToTMaxNs, layerDTMaxNs, -1);
+      if (passesPreEllipse) {
         hPairEllipseBefore.Fill(pairTrajectoryResidual[pair], pairECalDT[pair]);
+        const double radiusSquared = PairEllipseRadiusSquared(
+            pairTrajectoryResidual[pair], pairECalDT[pair]);
+        const double rank = std::isfinite(pairECalScore[pair])
+                                ? pairECalScore[pair] : radiusSquared;
+        preEllipseCandidates.push_back({pair, i1, i2, id1, id2, rank});
+      }
       if (!PassCuts(pulseToT[i1], pulseToT[i2], pairLayerDT[pair],
                     pairTrajectoryResidual[pair], pairECalDT[pair],
                     memberToTMinNs, memberToTMaxNs, layerDTMaxNs,
                     pairRadiusMax))
         continue;
       eventHasGoodPair = true;
+      const double radiusSquared = PairEllipseRadiusSquared(
+          pairTrajectoryResidual[pair], pairECalDT[pair]);
+      const double rank = std::isfinite(pairECalScore[pair])
+                              ? pairECalScore[pair] : radiusSquared;
+      acceptedCandidates.push_back({pair, i1, i2, id1, id2, rank});
       // 3. Detector-wide paired-member timing, under the same study cuts.
       // This is ECal minus each member's LE, NOT ECal minus pair-mean time.
       histograms[id1/16]->Fill(pulseECalDT[i1]);
@@ -316,6 +394,51 @@ void PlotPairingVariables(int runNumber = 6077,
       hLEL2.Fill(pairLEL2[pair]);
       fillGeometry(hPairXDiffVsX1, hPairXResidual, hPairX1MinusXw,
                    hOutOfPlaneAngle, i1, i2);
+    }
+    auto bestCandidate = [](const std::vector<PairCandidate>& candidates,
+                            bool selectedBarOnly, int selectedBar)
+        -> const PairCandidate* {
+      const PairCandidate *best = nullptr;
+      for (const PairCandidate& candidate : candidates) {
+        if (selectedBarOnly && candidate.id1 / 16 !=
+                                  static_cast<size_t>(selectedBar))
+          continue;
+        if (!best || candidate.rank < best->rank ||
+            (candidate.rank == best->rank && candidate.pair < best->pair))
+          best = &candidate;
+      }
+      return best;
+    };
+    const PairCandidate *bestPreEllipse =
+        bestCandidate(preEllipseCandidates, false, selectedLayer1Bar);
+    if (bestPreEllipse)
+      hPairEllipseBest.Fill(pairTrajectoryResidual[bestPreEllipse->pair],
+                            pairECalDT[bestPreEllipse->pair]);
+
+    const PairCandidate *bestGlobal =
+        bestCandidate(acceptedCandidates, false, selectedLayer1Bar);
+    if (bestGlobal) {
+      const size_t pair = bestGlobal->pair;
+      bestHistograms[bestGlobal->id1 / 16]->Fill(
+          pulseECalDT[bestGlobal->i1]);
+      bestHistograms[bestGlobal->id2 / 16]->Fill(
+          pulseECalDT[bestGlobal->i2]);
+      fillGeometry(hBestAllPairXDiffVsX1, hBestAllPairXResidual,
+                   hBestAllPairX1MinusXw, hBestAllOutOfPlaneAngle,
+                   bestGlobal->i1, bestGlobal->i2);
+    }
+    const PairCandidate *bestSelected =
+        bestCandidate(acceptedCandidates, true, selectedLayer1Bar);
+    if (bestSelected) {
+      const size_t pair = bestSelected->pair;
+      hBestPairMeanLE.Fill(pairMeanLE[pair]);
+      hBestLayerDT.Fill(pairLayerDT[pair]);
+      hBestECalPairDT.Fill(pairECalDT[pair]);
+      hBestLEL1.Fill(pairLEL1[pair]);
+      hBestLEL2.Fill(pairLEL2[pair]);
+      fillGeometry(hBestPairXDiffVsX1, hBestPairXResidual,
+                   hBestPairX1MinusXw, hBestOutOfPlaneAngle,
+                   bestSelected->i1, bestSelected->i2);
     }
     if (eventHasGoodPair)
       ++goodPairEventCount;
@@ -349,7 +472,9 @@ void PlotPairingVariables(int runNumber = 6077,
   }
 
   // 4. Sigma here is full-sample standard deviation, NOT a Gaussian-core fit.
-  for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2})
+  for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT, &hLEL1, &hLEL2,
+                  &hBestPairMeanLE, &hBestLayerDT, &hBestECalPairDT,
+                  &hBestLEL1, &hBestLEL2})
     Report(*h);
   if (hLayerDT.GetEntries() >= 2)
     std::cout << "Equal-independent-layer estimate SD(dt)/sqrt(2) = "
@@ -357,10 +482,15 @@ void PlotPairingVariables(int runNumber = 6077,
   std::cout << "Widths are conditioned by stored-pair and study cuts; ECal residuals also include reference timing.\n";
 
   // 5. Draw copies so histograms remain on interactive canvases after return.
-  auto *timingCanvas = new TCanvas("cPairTiming_"+tag, title+" | "+cuts, 1500, 500);
-  timingCanvas->Divide(3, 1);
+  auto *timingCanvas = new TCanvas("cPairTiming_"+tag, title+" | "+cuts, 1500, 900);
+  timingCanvas->Divide(3, 2);
   int pad = 0;
   for (auto *h : {&hPairMeanLE, &hLayerDT, &hECalPairDT}) {
+    timingCanvas->cd(++pad);
+    h->DrawCopy("HIST");
+    Annotate(*h);
+  }
+  for (auto *h : {&hBestPairMeanLE, &hBestLayerDT, &hBestECalPairDT}) {
     timingCanvas->cd(++pad);
     h->DrawCopy("HIST");
     Annotate(*h);
@@ -368,9 +498,11 @@ void PlotPairingVariables(int runNumber = 6077,
   timingCanvas->Update();
 
   // 6. Matched layer spectra, with separate standard deviations.
-  auto *layerCanvas = new TCanvas("cPairLayers_"+tag, title+" | "+cuts, 900, 650);
+  auto *layerCanvas = new TCanvas("cPairLayers_"+tag, title+" | "+cuts, 900, 900);
+  layerCanvas->Divide(1, 2);
   hLEL1.SetLineColor(kBlue+1);
   hLEL2.SetLineColor(kRed+1);
+  layerCanvas->cd(1);
   hLEL1.SetMaximum(1.3*std::max(1.0, std::max(hLEL1.GetMaximum(), hLEL2.GetMaximum())));
   auto *drawL1 = hLEL1.DrawCopy("HIST");
   auto *drawL2 = hLEL2.DrawCopy("HIST SAME");
@@ -379,6 +511,17 @@ void PlotPairingVariables(int runNumber = 6077,
   legend->AddEntry(drawL1, "L1: "+WidthLabel(hLEL1), "l");
   legend->AddEntry(drawL2, "L2 partner: "+WidthLabel(hLEL2), "l");
   legend->Draw();
+  layerCanvas->cd(2);
+  hBestLEL1.SetLineColor(kBlue+1);
+  hBestLEL2.SetLineColor(kRed+1);
+  hBestLEL1.SetMaximum(1.3*std::max(1.0, std::max(hBestLEL1.GetMaximum(), hBestLEL2.GetMaximum())));
+  auto *drawBestL1 = hBestLEL1.DrawCopy("HIST");
+  auto *drawBestL2 = hBestLEL2.DrawCopy("HIST SAME");
+  auto *bestLegend = new TLegend(0.40, 0.73, 0.89, 0.89);
+  bestLegend->SetBorderSize(0);
+  bestLegend->AddEntry(drawBestL1, "Best L1: "+WidthLabel(hBestLEL1), "l");
+  bestLegend->AddEntry(drawBestL2, "Best L2 partner: "+WidthLabel(hBestLEL2), "l");
+  bestLegend->Draw();
   layerCanvas->Update();
   if (savePlots) {
     timingCanvas->SaveAs(outputPrefix+"_timing.pdf");
@@ -390,12 +533,17 @@ void PlotPairingVariables(int runNumber = 6077,
   // 7. Pair geometry and rough transport-coordinate angle diagnostics.
   Report(hPairXResidual);
   Report(hOutOfPlaneAngle);
+  Report(hBestPairXResidual);
+  Report(hBestOutOfPlaneAngle);
   if (hPairXResidual.GetEntries() >= 2)
     std::cout << "Rough CDet x position resolution estimate = "
               << hPairXResidual.GetStdDev() * 1000.0 << " mm (pair residual SD).\n";
+  if (hBestPairXResidual.GetEntries() >= 2)
+    std::cout << "Rough best-pair CDet x position estimate = "
+              << hBestPairXResidual.GetStdDev() * 1000.0 << " mm (best-pair residual SD).\n";
   auto *geometryCanvas = new TCanvas("cPairGeometry_"+tag,
-      title+" | pair geometry", 1500, 500);
-  geometryCanvas->Divide(3, 1);
+      title+" | pair geometry", 1500, 900);
+  geometryCanvas->Divide(3, 2);
   geometryCanvas->cd(1);
   hPairXDiffVsX1.DrawCopy("COLZ");
   geometryCanvas->cd(2);
@@ -404,14 +552,22 @@ void PlotPairingVariables(int runNumber = 6077,
   geometryCanvas->cd(3);
   hOutOfPlaneAngle.DrawCopy("HIST");
   Annotate(hOutOfPlaneAngle);
+  geometryCanvas->cd(4);
+  hBestPairXDiffVsX1.DrawCopy("COLZ");
+  geometryCanvas->cd(5);
+  hBestPairXResidual.DrawCopy("HIST");
+  Annotate(hBestPairXResidual);
+  geometryCanvas->cd(6);
+  hBestOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hBestOutOfPlaneAngle);
   geometryCanvas->Update();
   if (savePlots) {
     geometryCanvas->SaveAs(outputPrefix+"_geometry.pdf");
     geometryCanvas->SaveAs(outputPrefix+"_geometry.png");
   }
   auto *allGeometryCanvas = new TCanvas("cAllPairGeometry_"+tag,
-      allTitle+" | pair geometry", 1500, 500);
-  allGeometryCanvas->Divide(3, 1);
+      allTitle+" | pair geometry", 1500, 900);
+  allGeometryCanvas->Divide(3, 2);
   allGeometryCanvas->cd(1);
   hAllPairXDiffVsX1.DrawCopy("COLZ");
   allGeometryCanvas->cd(2);
@@ -420,6 +576,14 @@ void PlotPairingVariables(int runNumber = 6077,
   allGeometryCanvas->cd(3);
   hAllOutOfPlaneAngle.DrawCopy("HIST");
   Annotate(hAllOutOfPlaneAngle);
+  allGeometryCanvas->cd(4);
+  hBestAllPairXDiffVsX1.DrawCopy("COLZ");
+  allGeometryCanvas->cd(5);
+  hBestAllPairXResidual.DrawCopy("HIST");
+  Annotate(hBestAllPairXResidual);
+  allGeometryCanvas->cd(6);
+  hBestAllOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hBestAllOutOfPlaneAngle);
   allGeometryCanvas->Update();
   if (savePlots) {
     allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.pdf");
@@ -429,12 +593,16 @@ void PlotPairingVariables(int runNumber = 6077,
   // Alternative geometry canvases: use the ECal-guided Layer-2-to-Layer-1
   // projection x_w, which is the trajectory residual up to a sign.
   Report(hPairX1MinusXw);
+  Report(hBestPairX1MinusXw);
   if (hPairX1MinusXw.GetEntries() >= 2)
     std::cout << "Rough Layer-1 x resolution estimate from x1-xw = "
               << hPairX1MinusXw.GetStdDev() * 1000.0 << " mm.\n";
+  if (hBestPairX1MinusXw.GetEntries() >= 2)
+    std::cout << "Rough best-pair Layer-1 x estimate from x1-xw = "
+              << hBestPairX1MinusXw.GetStdDev() * 1000.0 << " mm.\n";
   auto *xwGeometryCanvas = new TCanvas("cPairGeometryXw_"+tag,
-      title+" | x1-xw geometry", 1500, 500);
-  xwGeometryCanvas->Divide(3, 1);
+      title+" | x1-xw geometry", 1500, 900);
+  xwGeometryCanvas->Divide(3, 2);
   xwGeometryCanvas->cd(1);
   hPairXDiffVsX1.DrawCopy("COLZ");
   xwGeometryCanvas->cd(2);
@@ -443,14 +611,22 @@ void PlotPairingVariables(int runNumber = 6077,
   xwGeometryCanvas->cd(3);
   hOutOfPlaneAngle.DrawCopy("HIST");
   Annotate(hOutOfPlaneAngle);
+  xwGeometryCanvas->cd(4);
+  hBestPairXDiffVsX1.DrawCopy("COLZ");
+  xwGeometryCanvas->cd(5);
+  hBestPairX1MinusXw.DrawCopy("HIST");
+  Annotate(hBestPairX1MinusXw);
+  xwGeometryCanvas->cd(6);
+  hBestOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hBestOutOfPlaneAngle);
   xwGeometryCanvas->Update();
   if (savePlots) {
     xwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw.pdf");
     xwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw.png");
   }
   auto *allXwGeometryCanvas = new TCanvas("cAllPairGeometryXw_"+tag,
-      allTitle+" | x1-xw geometry", 1500, 500);
-  allXwGeometryCanvas->Divide(3, 1);
+      allTitle+" | x1-xw geometry", 1500, 900);
+  allXwGeometryCanvas->Divide(3, 2);
   allXwGeometryCanvas->cd(1);
   hAllPairXDiffVsX1.DrawCopy("COLZ");
   allXwGeometryCanvas->cd(2);
@@ -459,6 +635,14 @@ void PlotPairingVariables(int runNumber = 6077,
   allXwGeometryCanvas->cd(3);
   hAllOutOfPlaneAngle.DrawCopy("HIST");
   Annotate(hAllOutOfPlaneAngle);
+  allXwGeometryCanvas->cd(4);
+  hBestAllPairXDiffVsX1.DrawCopy("COLZ");
+  allXwGeometryCanvas->cd(5);
+  hBestAllPairX1MinusXw.DrawCopy("HIST");
+  Annotate(hBestAllPairX1MinusXw);
+  allXwGeometryCanvas->cd(6);
+  hBestAllOutOfPlaneAngle.DrawCopy("HIST");
+  Annotate(hBestAllOutOfPlaneAngle);
   allXwGeometryCanvas->Update();
   if (savePlots) {
     allXwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw_all.pdf");
@@ -467,9 +651,22 @@ void PlotPairingVariables(int runNumber = 6077,
 
   // 11. Candidate pair population before the ECal trajectory-time ellipse.
   auto *ellipseCanvas = new TCanvas("cPairEllipse_"+tag,
-      title+" | pre-ellipse pair candidates", 900, 700);
+      title+" | pre-ellipse pair candidates", 900, 900);
+  ellipseCanvas->Divide(1, 2);
+  ellipseCanvas->cd(1);
   ellipseCanvas->SetRightMargin(0.14);
   hPairEllipseBefore.DrawCopy("COLZ");
+  if (pairRadiusMax > 0) {
+    TEllipse ellipse(0.0, CDetPairingPlots::kPairEllipseTimingCenterNs,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTrajectoryScaleM,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTimingScaleNs);
+    ellipse.SetFillStyle(0);
+    ellipse.SetLineColor(kRed+1);
+    ellipse.SetLineWidth(3);
+    ellipse.Draw("SAME");
+  }
+  ellipseCanvas->cd(2);
+  hPairEllipseBest.DrawCopy("COLZ");
   if (pairRadiusMax > 0) {
     TEllipse ellipse(0.0, CDetPairingPlots::kPairEllipseTimingCenterNs,
         pairRadiusMax * CDetPairingPlots::kPairEllipseTrajectoryScaleM,
@@ -489,8 +686,12 @@ void PlotPairingVariables(int runNumber = 6077,
   // Graphs omit low-statistics bars; the optional CSV retains every bar/status.
   auto *g1 = new TGraphErrors();
   auto *g2 = new TGraphErrors();
+  auto *gBest1 = new TGraphErrors();
+  auto *gBest2 = new TGraphErrors();
   g1->SetName("gPairSigmaL1_"+tag);
   g2->SetName("gPairSigmaL2_"+tag);
+  gBest1->SetName("gBestPairSigmaL1_"+tag);
+  gBest2->SetName("gBestPairSigmaL2_"+tag);
   std::ofstream csv;
   if (savePlots) {
     csv.open((TString(outputPrefix)+"_sigma_vs_bar.csv").Data());
@@ -509,6 +710,13 @@ void PlotPairingVariables(int runNumber = 6077,
       g->SetPoint(point, bar%84, h.GetStdDev());
       g->SetPointError(point, 0, h.GetStdDevError());
     }
+    const auto &bestH = *bestHistograms[bar];
+    if (bestH.GetEntries() >= minEntriesPerBar) {
+      auto *g = bar < 84 ? gBest1 : gBest2;
+      const int point = g->GetN();
+      g->SetPoint(point, bar%84, bestH.GetStdDev());
+      g->SetPointError(point, 0, bestH.GetStdDevError());
+    }
     // if (csv) {
     //   csv << bar << ',' << bar/84+1 << ',' << bar%84 << ',' << h.GetEntries() << ',';
     //   if (h.GetEntries() >= 2)
@@ -518,12 +726,14 @@ void PlotPairingVariables(int runNumber = 6077,
     //       << ',' << (valid ? "accepted" : "insufficient_entries") << '\n';
     // }
   }
-  auto *canvas = new TCanvas("cPairSigmaVsBar_"+tag, TString::Format("Run %d | ", runNumber)+cuts, 1200, 700);
+  auto *canvas = new TCanvas("cPairSigmaVsBar_"+tag, TString::Format("Run %d | ", runNumber)+cuts, 1200, 900);
+  canvas->Divide(1, 2);
   double ymax = 1;
   for (auto *g : {g1, g2})
     for (int i = 0; i < g->GetN(); ++i)
       ymax = std::max(ymax, g->GetPointY(i)+g->GetErrorY(i));
-  canvas->DrawFrame(-0.5, 0, 83.5, 1.2*ymax, TString::Format("Run %d: paired-member timing widths;Bar number within layer;SD(t_{ECal}-t_{CDet,member}) (ns)", runNumber));
+  canvas->cd(1);
+  canvas->DrawFrame(-0.5, 0, 83.5, 1.2*ymax, TString::Format("Run %d: all paired-member timing widths;Bar number within layer;SD(t_{ECal}-t_{CDet,member}) (ns)", runNumber));
   g1->SetMarkerStyle(20); g1->SetMarkerColor(kBlue+1); g1->SetLineColor(kBlue+1);
   g2->SetMarkerStyle(22); g2->SetMarkerColor(kRed+1); g2->SetLineColor(kRed+1);
   if (g1->GetN()) g1->Draw("P SAME");
@@ -532,6 +742,20 @@ void PlotPairingVariables(int runNumber = 6077,
   barLegend->AddEntry(g1, "Layer 1", "p");
   barLegend->AddEntry(g2, "Layer 2", "p");
   barLegend->Draw();
+  double bestYmax = 1;
+  for (auto *g : {gBest1, gBest2})
+    for (int i = 0; i < g->GetN(); ++i)
+      bestYmax = std::max(bestYmax, g->GetPointY(i)+g->GetErrorY(i));
+  canvas->cd(2);
+  canvas->DrawFrame(-0.5, 0, 83.5, 1.2*bestYmax, TString::Format("Run %d: best-pair timing widths;Bar number within layer;SD(t_{ECal}-t_{CDet,member}) (ns)", runNumber));
+  gBest1->SetMarkerStyle(20); gBest1->SetMarkerColor(kBlue+1); gBest1->SetLineColor(kBlue+1);
+  gBest2->SetMarkerStyle(22); gBest2->SetMarkerColor(kRed+1); gBest2->SetLineColor(kRed+1);
+  if (gBest1->GetN()) gBest1->Draw("P SAME");
+  if (gBest2->GetN()) gBest2->Draw("P SAME");
+  auto *bestBarLegend = new TLegend(0.65, 0.76, 0.89, 0.89);
+  bestBarLegend->AddEntry(gBest1, "Layer 1", "p");
+  bestBarLegend->AddEntry(gBest2, "Layer 2", "p");
+  bestBarLegend->Draw();
   canvas->Update();
   if (savePlots) {
     canvas->SaveAs(outputPrefix+"_sigma_vs_bar.pdf");

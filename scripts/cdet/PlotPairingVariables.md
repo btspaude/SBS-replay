@@ -42,6 +42,21 @@ pixel identities, finite timing values, and the pulse-to-pair array sizes. The
 configured member ToT interval is inclusive for both pulses. The current
 Run-6077 configuration uses `8 <= ToT <= 35 ns`.
 
+The existing upper row of the plots uses every stored pair that passes the
+configured study cuts. The lower row is an event-level best-pair view. For
+each ECal-admitted event, the macro chooses the accepted pair with the smallest
+`earm.cdet.pair.ecal_score`. If that branch is nonfinite, it uses the explicitly
+recomputed ellipse radius squared as the ranking value. The focused bar plots
+choose the best accepted pair among candidates whose Layer-1 bar is the
+requested bar; the all-detector geometry plots choose the best accepted pair
+anywhere in the detector. This produces one pair per event for the best-pair
+row, while preserving the all-pair population above it.
+
+This is a diagnostic ranking of pairs already stored in the ROOT file. It does
+not rerun the replay assignment or create a new pair collection. The best-pair
+selection is made after the configured member-ToT, optional layer-dt, and
+pair-radius cuts.
+
 The pair ellipse is enabled by default:
 
 ```ini
@@ -73,23 +88,30 @@ selections already applied upstream when the ROOT file was produced.
 
 ## Timing canvases
 
-The first canvas contains three spectra for the selected Layer-1 bar:
+The first canvas contains two rows of three spectra for the selected Layer-1
+bar. The upper row contains every accepted pair and the lower row contains the
+best accepted pair per event:
 
 1. Stored pair-mean corrected LE, `(tL1 + tL2)/2`.
 2. Inter-layer timing, `tL2 - tL1`.
 3. ECal-minus-pair timing residual, `tECal - (tL1 + tL2)/2`.
 
-The second canvas overlays the corrected LE spectra for the Layer-1 member and
-its Layer-2 partner. The macro reports the full-sample standard deviation and
-its ROOT moment-based error; it does not perform a Gaussian fit.
+The lower row has the same three quantities after the best-pair ranking.
+
+The second canvas has two rows. Each row overlays the corrected LE spectra for
+the Layer-1 member and its Layer-2 partner. The upper row uses all accepted
+pairs; the lower row uses the best pair per event for the selected Layer-1 bar.
+The macro reports the full-sample standard deviation and its ROOT moment-based
+error; it does not perform a Gaussian fit.
 
 The current display range for the ECal pair residual is `-40` to `0 ns`. This
 is a display range, while the ellipse uses the residual centered near `-26 ns`.
 
 ## Pair geometry canvases
 
-The focused geometry canvas has three panels, all using accepted pairs from
-the selected Layer-1 bar:
+The focused geometry canvas has two rows of three panels. The upper row uses
+all accepted pairs from the selected Layer-1 bar; the lower row uses the best
+accepted pair per event for that bar. Each row contains:
 
 1. A two-dimensional plot with `x1 - x2` on the horizontal axis and `x1` on
    the vertical axis.
@@ -184,12 +206,13 @@ not as a precision scattering-angle measurement.
 The standard deviation of the second panel is printed as a rough CDet x
 position-resolution estimate in millimeters.
 
-A second, otherwise identical geometry canvas is filled before the selected
-bar restriction and therefore uses accepted pairs from all detector bars. Its
+A second, otherwise identical two-row geometry canvas is filled before the
+selected-bar restriction and therefore uses all accepted pairs in the detector
+in its upper row and the best accepted pair per event in its lower row. Its
 output names end in `_geometry_all`.
 
-The macro also writes `_geometry_xw` and `_geometry_xw_all` copies. Their
-middle panels use an ECal-guided projection from Layer 2 back to Layer 1:
+The macro also writes two-row `_geometry_xw` and `_geometry_xw_all` copies.
+Their middle panels use an ECal-guided projection from Layer 2 back to Layer 1:
 
 `xw = x2 + (xECal / zECal) × (z1 − z2)`
 
@@ -200,12 +223,13 @@ also printed as a separate Layer-1 x-position estimate.
 
 ## Pre-ellipse diagnostic
 
-The `_ellipse` canvas shows the all-detector candidate pair population before
-the ECal trajectory-time radius cut. Its horizontal axis is the trajectory residual
-`rₓ`, and its vertical axis is
-`Δt_pair = tECal − <tCDet>pair`. The event-level ECal cuts, pair validity,
-member-ToT cut, and optional inter-layer timing cut have already been applied,
-but the pair-radius cut has not.
+The `_ellipse` canvas has two rows. The upper row shows the all-detector
+candidate pair population before the ECal trajectory-time radius cut. The
+lower row shows the best pre-ellipse candidate per event, ranked by the same
+ECal score. Its horizontal axis is the trajectory residual `rₓ`, and its
+vertical axis is `Δt_pair = tECal − <tCDet>pair`. The event-level ECal cuts,
+pair validity, member-ToT cut, and optional inter-layer timing cut have already
+been applied, but the pair-radius cut has not.
 
 The configured ellipse is drawn on top of the candidate population. With the
 Run 6077 settings it is centered at `(rₓ, Δt_pair) = (0 m, −26 ns)` and has
@@ -214,10 +238,12 @@ which candidate pairs are removed by the spatial-plus-timing ellipse.
 
 ## Bar-width canvas
 
-The fourth canvas shows the standard deviation of
-`tECal - tCDet,member` versus bar number for both detector layers. Bars with
-fewer than `plots.min_entries_per_bar` accepted members are omitted from the
-graph. The companion CSV retains every bar, including low-statistics bars,
+The fourth canvas has two rows. The upper row shows the standard deviation of
+`tECal - tCDet,member` versus bar number for all accepted pairs; the lower row
+shows the same quantity for the best pair per event. Both rows show the two
+detector layers. Bars with fewer than `plots.min_entries_per_bar` accepted
+members are omitted from the graph. The companion CSV retains every bar,
+including low-statistics bars,
 with its entries, mean, standard deviation, error, underflow, overflow, and
 status.
 
