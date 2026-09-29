@@ -15,6 +15,9 @@
 
 #include <TSystem.h>
 #include <TString.h>
+#include <TCanvas.h>
+#include <TH1D.h>
+#include <TH2D.h>
 
 #include <algorithm>
 #include <cmath>
@@ -41,6 +44,161 @@ struct PixelResult {
 };
 
 using PixelResults = std::vector<PixelResult>;
+
+double Median(std::vector<double> values) {
+  if (values.empty()) return std::numeric_limits<double>::quiet_NaN();
+  std::sort(values.begin(), values.end());
+  const std::size_t middle = values.size() / 2;
+  if (values.size() % 2) return values[middle];
+  return 0.5 * (values[middle - 1] + values[middle]);
+}
+
+double RMS(const std::vector<double>& values) {
+  if (values.empty()) return std::numeric_limits<double>::quiet_NaN();
+  double sum = 0.0;
+  for (double value : values) sum += value;
+  const double mean = sum / values.size();
+  double squares = 0.0;
+  for (double value : values) squares += (value - mean) * (value - mean);
+  return std::sqrt(squares / values.size());
+}
+
+double MAD(const std::vector<double>& values) {
+  if (values.empty()) return std::numeric_limits<double>::quiet_NaN();
+  const double median = Median(values);
+  std::vector<double> deviations;
+  deviations.reserve(values.size());
+  for (double value : values) deviations.push_back(std::fabs(value - median));
+  return Median(deviations);
+}
+
+void WriteQualitativeDiagnostics(const char *workDirectory,
+                                const PixelResults& run5710,
+                                const std::vector<RunSpec>& runs,
+                                const std::map<int, PixelResults>& perRun) {
+  const TString runSummaryName = TString::Format(
+      "%s/CDet_cross_target_pixel_offset_run_summary.tsv", workDirectory);
+  const TString pixelSummaryName = TString::Format(
+      "%s/CDet_cross_target_pixel_offset_pixel_summary.tsv", workDirectory);
+  std::ofstream runSummary(runSummaryName.Data());
+  std::ofstream pixelSummary(pixelSummaryName.Data());
+  if (!runSummary || !pixelSummary) {
+    std::cerr << "[CDet offset scan] WARNING: could not create qualitative summaries.\n";
+    return;
+  }
+
+  runSummary << "run\tvalid_run_offsets\tvalid_comparisons\tmedian_delta_ns"
+             << "\trms_delta_ns\tmad_delta_ns\n";
+  pixelSummary << "pixel_id\tlayer\tbar\trun5710_offset_ns\tvalid_runs"
+               << "\tmedian_delta_ns\trms_delta_ns\tmad_delta_ns"
+               << "\tmin_delta_ns\tmax_delta_ns\tstatus\n";
+
+  std::vector<std::vector<double>> pixelDeltas(NumCDetPaddles);
+  std::vector<double> allDeltas;
+  std::vector<double> runMedians;
+  std::vector<double> runRms;
+  std::vector<int> runCounts;
+  runMedians.reserve(runs.size());
+  runRms.reserve(runs.size());
+  runCounts.reserve(runs.size());
+
+  for (const RunSpec& spec : runs) {
+    const PixelResults& values = perRun.at(spec.run);
+    int validOffsets = 0;
+    std::vector<double> deltas;
+    for (int pixel = 0; pixel < NumCDetPaddles; ++pixel) {
+      if (!values[pixel].valid) continue;
+      ++validOffsets;
+      if (!run5710[pixel].valid) continue;
+      const double delta = values[pixel].offset - run5710[pixel].offset;
+      if (!std::isfinite(delta)) continue;
+      deltas.push_back(delta);
+      pixelDeltas[pixel].push_back(delta);
+      allDeltas.push_back(delta);
+    }
+    runSummary << spec.run << "\t" << validOffsets << "\t" << deltas.size() << "\t"
+               << std::setprecision(9) << Median(deltas) << "\t" << RMS(deltas)
+               << "\t" << MAD(deltas) << "\n";
+    runMedians.push_back(Median(deltas));
+    runRms.push_back(RMS(deltas));
+    runCounts.push_back(static_cast<int>(deltas.size()));
+  }
+
+  for (int pixel = 0; pixel < NumCDetPaddles; ++pixel) {
+    const std::vector<double>& deltas = pixelDeltas[pixel];
+    pixelSummary << pixel << "\t" << (pixel / 1344 + 1) << "\t" << (pixel % 1344 / 16)
+                 << "\t";
+    if (run5710[pixel].valid) pixelSummary << run5710[pixel].offset;
+    else pixelSummary << "n/a";
+    pixelSummary << "\t" << deltas.size() << "\t" << Median(deltas) << "\t"
+                 << RMS(deltas) << "\t" << MAD(deltas) << "\t";
+    if (deltas.empty()) {
+      pixelSummary << "n/a\tn/a\tno_valid_comparison\n";
+      continue;
+    }
+    pixelSummary << *std::min_element(deltas.begin(), deltas.end()) << "\t"
+                 << *std::max_element(deltas.begin(), deltas.end()) << "\t"
+                 << (deltas.size() < 2 ? "single_run" : "usable") << "\n";
+  }
+
+  if (allDeltas.empty()) {
+    std::cerr << "[CDet offset scan] WARNING: no valid offset differences for plots.\n";
+    return;
+  }
+
+  double deltaMin = *std::min_element(allDeltas.begin(), allDeltas.end());
+  double deltaMax = *std::max_element(allDeltas.begin(), allDeltas.end());
+  double margin = std::max(0.1, 0.08 * (deltaMax - deltaMin));
+  if (deltaMax <= deltaMin) { deltaMin -= 1.0; deltaMax += 1.0; }
+  else { deltaMin -= margin; deltaMax += margin; }
+
+  TH1D hAllDelta("hAllDelta", "All valid pixel offset differences;Run offset - Run 5710 offset (ns);Pixel comparisons", 100, deltaMin, deltaMax);
+  TH1D hRunMedian("hRunMedian", "Run-to-run offset comparison;Run;Median difference (ns)", runs.size(), 0.5, runs.size() + 0.5);
+  TH1D hPixelMedian("hPixelMedian", "Per-pixel median difference;Pixel ID;Median difference (ns)", NumCDetPaddles, -0.5, NumCDetPaddles - 0.5);
+  TH1D hCoverage("hCoverage", "Per-pixel comparison coverage;Pixel ID;Number of runs", NumCDetPaddles, -0.5, NumCDetPaddles - 0.5);
+  TH2D hHeatmap("hOffsetHeatmap", "Pixel offset difference by run;Run;Pixel ID;Run offset - Run 5710 offset (ns)", runs.size(), 0.5, runs.size() + 0.5, NumCDetPaddles, -0.5, NumCDetPaddles - 0.5);
+
+  for (double value : allDeltas) hAllDelta.Fill(value);
+  for (std::size_t irun = 0; irun < runs.size(); ++irun) {
+    hRunMedian.SetBinContent(irun + 1, runMedians[irun]);
+    hRunMedian.SetBinError(irun + 1, runCounts[irun] > 0 ? runRms[irun] : 0.0);
+    hRunMedian.GetXaxis()->SetBinLabel(irun + 1, TString::Format("%d", runs[irun].run));
+    const PixelResults& values = perRun.at(runs[irun].run);
+    for (int pixel = 0; pixel < NumCDetPaddles; ++pixel) {
+      if (values[pixel].valid && run5710[pixel].valid) {
+        hHeatmap.SetBinContent(irun + 1, pixel + 1,
+                               values[pixel].offset - run5710[pixel].offset);
+      }
+    }
+  }
+  for (int pixel = 0; pixel < NumCDetPaddles; ++pixel) {
+    if (pixelDeltas[pixel].empty()) continue;
+    hPixelMedian.SetBinContent(pixel + 1, Median(pixelDeltas[pixel]));
+    hCoverage.SetBinContent(pixel + 1, pixelDeltas[pixel].size());
+  }
+
+  const TString pdfName = TString::Format("%s/CDet_cross_target_pixel_offset_diagnostics.pdf", workDirectory);
+  const TString pngName = TString::Format("%s/CDet_cross_target_pixel_offset_diagnostics.png", workDirectory);
+  TCanvas canvas("cCDetOffsetDiagnostics", "CDet offset diagnostics", 1600, 1000);
+  canvas.Divide(2, 2);
+  canvas.cd(1); hAllDelta.Draw();
+  canvas.cd(2); hRunMedian.Draw("E1");
+  canvas.cd(3); hPixelMedian.Draw();
+  canvas.cd(4); hHeatmap.Draw("COLZ");
+  canvas.SaveAs(pdfName.Data());
+  canvas.SaveAs(pngName.Data());
+  const TString coverageName = TString::Format("%s/CDet_cross_target_pixel_offset_coverage.png", workDirectory);
+  TCanvas coverageCanvas("cCDetOffsetCoverage", "CDet offset coverage", 1200, 600);
+  hCoverage.Draw();
+  coverageCanvas.SaveAs(coverageName.Data());
+
+  std::cout << "[CDet offset scan] Wrote qualitative summaries:\n"
+            << "  " << runSummaryName << "\n"
+            << "  " << pixelSummaryName << "\n"
+            << "  " << pdfName << "\n"
+            << "  " << pngName << "\n"
+            << "  " << coverageName << "\n";
+}
 
 // The inventory in CDet_CROSS_TARGET_RUN_INVENTORY.md, excluding Run 5710.
 const int kDefaultRuns[] = {
@@ -259,6 +417,7 @@ void CDet_CrossTargetPixelOffsetScan(
     return;
   }
   if (!WriteComparisonTable(outputTable, run5710, successfulRuns, perRun)) return;
+  WriteQualitativeDiagnostics(workDirectory, run5710, successfulRuns, perRun);
 
   std::cout << "[CDet offset scan] Wrote " << outputTable << "\n"
             << "[CDet offset scan] Work files and diagnostic plots are in "

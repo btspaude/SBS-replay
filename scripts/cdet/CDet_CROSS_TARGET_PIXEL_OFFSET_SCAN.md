@@ -45,6 +45,27 @@ files, fit-result files, ROOT diagnostics, and plots are placed under
 `CDet_cross_target_pixel_offset_scan_work/`. The summary table is
 `CDet_cross_target_pixel_offset_scan.tsv`.
 
+The macro also writes compact diagnostic outputs in the work directory so the
+scan can be reviewed without reading the wide pixel-by-run table:
+
+```text
+CDet_cross_target_pixel_offset_run_summary.tsv
+CDet_cross_target_pixel_offset_pixel_summary.tsv
+CDet_cross_target_pixel_offset_diagnostics.pdf
+CDet_cross_target_pixel_offset_diagnostics.png
+CDet_cross_target_pixel_offset_coverage.png
+```
+
+The run summary reports the number of valid offsets, the number of valid
+comparisons to Run 5710, and the median, RMS, and median absolute deviation
+(MAD) of the offset differences for each run. The pixel summary reports the
+same robust statistics for each pixel, along with its layer, bar, coverage,
+minimum and maximum observed difference, and a simple status field. The PDF
+and PNG diagnostics contain an all-comparison difference histogram, a
+run-by-run median plot, a per-pixel median plot, and a run-versus-pixel
+heatmap. The coverage PNG shows how many runs contributed a valid comparison
+for each pixel.
+
 To use a custom list, provide one run per line. A second column can give an
 explicit configuration path:
 
