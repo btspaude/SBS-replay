@@ -178,11 +178,10 @@ is
 \theta_x=\arctan(m).
 \]
 
-The macro multiplies this angle in radians by 1000, so the histogram is in
-mrad:
+The macro converts this angle from radians to degrees:
 
 ```cpp
-angle_mrad = 1000.0 * std::atan(m);
+angle_degrees = std::atan(m) * 180.0 / \pi;
 ```
 
 This calculation is repeated independently for every accepted pair in the
@@ -193,8 +192,8 @@ the ECal x coordinate are finite and the denominator
 averaged for this angle; both measurements enter the fit separately, along
 with the ECal point.
 
-The displayed angle is `1000*theta_x` in mrad. The current display range is
-`-60` to `80 mrad` with `5 mrad` bins. This is a rough geometric diagnostic,
+The displayed angle is `theta_x` in degrees. The current display range is
+`-40` to `40 degrees` with `0.1 degree` bins. This is a rough geometric diagnostic,
 not a replacement for a full track or optics reconstruction. It does not use
 uncertainties or perform a weighted fit, does not account for magnetic
 transport or detector alignment, and does not fit a free vertex. A nonzero

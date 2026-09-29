@@ -70,8 +70,8 @@ void PlotPairingVariables(int runNumber = 6077,
                          int segmentMax = -1, double xDiffMinM = -0.5,
                          double xDiffMaxM = 0.5, double x1MinM = -1.6,
                          double x1MaxM = 1.6, double xResidualMinM = -0.2,
-                         double xResidualMaxM = 0.2, double angleMinMrad = -60,
-                         double angleMaxMrad = 80, double angleBinWidthMrad = 5,
+                         double xResidualMaxM = 0.2, double angleMinDeg = -40,
+                         double angleMaxDeg = 40, double angleBinWidthDeg = 0.1,
                          double ecalTimeMinNs = -10,
                          double ecalTimeMaxNs = 4, double ecalEnergyMinGeV = 3.0,
                          double ecalEnergyMaxGeV = 4.5) {
@@ -79,12 +79,12 @@ void PlotPairingVariables(int runNumber = 6077,
   const int nLE = Bins(binWidthNs, leMinNs, leMaxNs);
   const int nDT = Bins(binWidthNs, dtMinNs, dtMaxNs);
   const int nECalDT = Bins(binWidthNs, ecalDTMinNs, ecalDTMaxNs);
-  const int nAngleBins = Bins(angleBinWidthMrad, angleMinMrad, angleMaxMrad);
+  const int nAngleBins = Bins(angleBinWidthDeg, angleMinDeg, angleMaxDeg);
   if ((savePlots && (!outputDirectory || !outputDirectory[0])) || minEntriesPerBar < 2 || !nLE || !nDT || !nECalDT ||
       !std::isfinite(xDiffMinM) || !std::isfinite(xDiffMaxM) || xDiffMaxM <= xDiffMinM ||
       !std::isfinite(x1MinM) || !std::isfinite(x1MaxM) || x1MaxM <= x1MinM ||
       !std::isfinite(xResidualMinM) || !std::isfinite(xResidualMaxM) || xResidualMaxM <= xResidualMinM ||
-      !std::isfinite(angleMinMrad) || !std::isfinite(angleMaxMrad) || angleMaxMrad <= angleMinMrad ||
+      !std::isfinite(angleMinDeg) || !std::isfinite(angleMaxDeg) || angleMaxDeg <= angleMinDeg ||
       !nAngleBins ||
       !std::isfinite(ecalTimeMinNs) || !std::isfinite(ecalTimeMaxNs) || ecalTimeMaxNs <= ecalTimeMinNs ||
       !std::isfinite(ecalEnergyMinGeV) || !std::isfinite(ecalEnergyMaxGeV) || ecalEnergyMaxGeV <= ecalEnergyMinGeV ||
@@ -186,8 +186,8 @@ void PlotPairingVariables(int runNumber = 6077,
       title+";x_{1} - x_{w} (m);Pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hOutOfPlaneAngle("hOutOfPlaneAngle_"+tag,
-      title+";Out-of-plane angle (mrad);Pairs", nAngleBins,
-      angleMinMrad, angleMaxMrad);
+      title+";Out-of-plane angle (degrees);Pairs", nAngleBins,
+      angleMinDeg, angleMaxDeg);
   TH2D hBestPairXDiffVsX1("hBestPairXDiffVsX1_"+tag,
       title+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
       xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
@@ -198,8 +198,8 @@ void PlotPairingVariables(int runNumber = 6077,
       title+";x_{1} - x_{w} (m);Best pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hBestOutOfPlaneAngle("hBestOutOfPlaneAngle_"+tag,
-      title+";Out-of-plane angle (mrad);Best pairs", nAngleBins,
-      angleMinMrad, angleMaxMrad);
+      title+";Out-of-plane angle (degrees);Best pairs", nAngleBins,
+      angleMinDeg, angleMaxDeg);
   TH1D hBestPairMeanLE("hBestPairMeanLE_"+tag,
       title+";Corrected best-pair mean LE (ns);Best pair per event", nLE, leMinNs, leMaxNs);
   TH1D hBestLayerDT("hBestLayerDT_"+tag,
@@ -221,8 +221,8 @@ void PlotPairingVariables(int runNumber = 6077,
       allTitle+";x_{1} - x_{w} (m);Pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hAllOutOfPlaneAngle("hAllOutOfPlaneAngle_"+tag,
-      allTitle+";Out-of-plane angle (mrad);Pairs", nAngleBins,
-      angleMinMrad, angleMaxMrad);
+      allTitle+";Out-of-plane angle (degrees);Pairs", nAngleBins,
+      angleMinDeg, angleMaxDeg);
   TH2D hBestAllPairXDiffVsX1("hBestAllPairXDiffVsX1_"+tag,
       allTitle+";x_{1} - x_{2} (m);x_{1} (m)", nGeometryBins, xDiffMinM,
       xDiffMaxM, nGeometryBins, x1MinM, x1MaxM);
@@ -233,8 +233,8 @@ void PlotPairingVariables(int runNumber = 6077,
       allTitle+";x_{1} - x_{w} (m);Best pairs", nGeometryBins,
       xResidualMinM, xResidualMaxM);
   TH1D hBestAllOutOfPlaneAngle("hBestAllOutOfPlaneAngle_"+tag,
-      allTitle+";Out-of-plane angle (mrad);Best pairs", nAngleBins,
-      angleMinMrad, angleMaxMrad);
+      allTitle+";Out-of-plane angle (degrees);Best pairs", nAngleBins,
+      angleMinDeg, angleMaxDeg);
   TH2D hPairEllipseBefore("hPairEllipseBefore_"+tag,
       allTitle+";r_{x} (m);#Delta t_{pair} = t_{ECal} - <t_{CDet}>_{pair} (ns)",
       160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
@@ -285,7 +285,7 @@ void PlotPairingVariables(int runNumber = 6077,
     const double denominator = z1*z1 + z2*z2 +
                                kECalZFromTargetM*kECalZFromTargetM;
     if (denominator > 0.0)
-      outOfPlaneAngle.Fill(1000.0 * std::atan(numerator / denominator));
+      outOfPlaneAngle.Fill(std::atan(numerator / denominator) * 180.0 / 3.14159265358979323846);
   };
 
   // All 168 paired-member histograms are filled before the selected-bar cut.
@@ -788,8 +788,8 @@ void PlotPairingVariables(const char *configFile,
     "plots.layer_dt_min_ns", "plots.layer_dt_max_ns", "plots.ecal_dt_min_ns",
     "plots.ecal_dt_max_ns", "plots.min_entries_per_bar", "plots.x_diff_min_m",
     "plots.x_diff_max_m", "plots.x1_min_m", "plots.x1_max_m",
-    "plots.x_residual_min_m", "plots.x_residual_max_m", "plots.angle_min_mrad",
-    "plots.angle_max_mrad", "plots.angle_bin_width_mrad", "output.save_plots",
+    "plots.x_residual_min_m", "plots.x_residual_max_m", "plots.angle_min_deg",
+    "plots.angle_max_deg", "plots.angle_bin_width_deg", "output.save_plots",
     "output.directory"
   };
   TIter next(config.GetTable());
@@ -845,8 +845,8 @@ void PlotPairingVariables(const char *configFile,
         static_cast<int>(segmentMax), number("plots.x_diff_min_m", -0.5),
         number("plots.x_diff_max_m", 0.5), number("plots.x1_min_m", -1.6),
         number("plots.x1_max_m", 1.6), number("plots.x_residual_min_m", -0.2),
-        number("plots.x_residual_max_m", 0.2), number("plots.angle_min_mrad", -60),
-        number("plots.angle_max_mrad", 80), number("plots.angle_bin_width_mrad", 5),
+        number("plots.x_residual_max_m", 0.2), number("plots.angle_min_deg", -40),
+        number("plots.angle_max_deg", 40), number("plots.angle_bin_width_deg", 0.1),
         number("cuts.ecal_time_min_ns", -10),
         number("cuts.ecal_time_max_ns", 4), number("cuts.ecal_energy_min_gev", 3.0),
         number("cuts.ecal_energy_max_gev", 4.5));
