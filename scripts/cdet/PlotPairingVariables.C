@@ -531,10 +531,10 @@ void PlotPairingVariables(int runNumber = 6077,
   }
 
   // 7. Pair geometry and rough transport-coordinate angle diagnostics.
-  Report(hPairXResidual);
-  Report(hOutOfPlaneAngle);
-  Report(hBestPairXResidual);
-  Report(hBestOutOfPlaneAngle);
+  Report(hPairXResidual, "m");
+  Report(hOutOfPlaneAngle, "degrees");
+  Report(hBestPairXResidual, "m");
+  Report(hBestOutOfPlaneAngle, "degrees");
   if (hPairXResidual.GetEntries() >= 2)
     std::cout << "Rough CDet x position resolution estimate = "
               << hPairXResidual.GetStdDev() * 1000.0 << " mm (pair residual SD).\n";
@@ -548,18 +548,18 @@ void PlotPairingVariables(int runNumber = 6077,
   hPairXDiffVsX1.DrawCopy("COLZ");
   geometryCanvas->cd(2);
   hPairXResidual.DrawCopy("HIST");
-  Annotate(hPairXResidual);
+  Annotate(hPairXResidual, "m");
   geometryCanvas->cd(3);
   hOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hOutOfPlaneAngle);
+  Annotate(hOutOfPlaneAngle, "degrees");
   geometryCanvas->cd(4);
   hBestPairXDiffVsX1.DrawCopy("COLZ");
   geometryCanvas->cd(5);
   hBestPairXResidual.DrawCopy("HIST");
-  Annotate(hBestPairXResidual);
+  Annotate(hBestPairXResidual, "m");
   geometryCanvas->cd(6);
   hBestOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hBestOutOfPlaneAngle);
+  Annotate(hBestOutOfPlaneAngle, "degrees");
   geometryCanvas->Update();
   if (savePlots) {
     geometryCanvas->SaveAs(outputPrefix+"_geometry.pdf");
@@ -572,18 +572,18 @@ void PlotPairingVariables(int runNumber = 6077,
   hAllPairXDiffVsX1.DrawCopy("COLZ");
   allGeometryCanvas->cd(2);
   hAllPairXResidual.DrawCopy("HIST");
-  Annotate(hAllPairXResidual);
+  Annotate(hAllPairXResidual, "m");
   allGeometryCanvas->cd(3);
   hAllOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hAllOutOfPlaneAngle);
+  Annotate(hAllOutOfPlaneAngle, "degrees");
   allGeometryCanvas->cd(4);
   hBestAllPairXDiffVsX1.DrawCopy("COLZ");
   allGeometryCanvas->cd(5);
   hBestAllPairXResidual.DrawCopy("HIST");
-  Annotate(hBestAllPairXResidual);
+  Annotate(hBestAllPairXResidual, "m");
   allGeometryCanvas->cd(6);
   hBestAllOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hBestAllOutOfPlaneAngle);
+  Annotate(hBestAllOutOfPlaneAngle, "degrees");
   allGeometryCanvas->Update();
   if (savePlots) {
     allGeometryCanvas->SaveAs(outputPrefix+"_geometry_all.pdf");
@@ -592,8 +592,8 @@ void PlotPairingVariables(int runNumber = 6077,
 
   // Alternative geometry canvases: use the ECal-guided Layer-2-to-Layer-1
   // projection x_w, which is the trajectory residual up to a sign.
-  Report(hPairX1MinusXw);
-  Report(hBestPairX1MinusXw);
+  Report(hPairX1MinusXw, "m");
+  Report(hBestPairX1MinusXw, "m");
   if (hPairX1MinusXw.GetEntries() >= 2)
     std::cout << "Rough Layer-1 x resolution estimate from x1-xw = "
               << hPairX1MinusXw.GetStdDev() * 1000.0 << " mm.\n";
@@ -607,18 +607,18 @@ void PlotPairingVariables(int runNumber = 6077,
   hPairXDiffVsX1.DrawCopy("COLZ");
   xwGeometryCanvas->cd(2);
   hPairX1MinusXw.DrawCopy("HIST");
-  Annotate(hPairX1MinusXw);
+  Annotate(hPairX1MinusXw, "m");
   xwGeometryCanvas->cd(3);
   hOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hOutOfPlaneAngle);
+  Annotate(hOutOfPlaneAngle, "degrees");
   xwGeometryCanvas->cd(4);
   hBestPairXDiffVsX1.DrawCopy("COLZ");
   xwGeometryCanvas->cd(5);
   hBestPairX1MinusXw.DrawCopy("HIST");
-  Annotate(hBestPairX1MinusXw);
+  Annotate(hBestPairX1MinusXw, "m");
   xwGeometryCanvas->cd(6);
   hBestOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hBestOutOfPlaneAngle);
+  Annotate(hBestOutOfPlaneAngle, "degrees");
   xwGeometryCanvas->Update();
   if (savePlots) {
     xwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw.pdf");
@@ -631,18 +631,18 @@ void PlotPairingVariables(int runNumber = 6077,
   hAllPairXDiffVsX1.DrawCopy("COLZ");
   allXwGeometryCanvas->cd(2);
   hAllPairX1MinusXw.DrawCopy("HIST");
-  Annotate(hAllPairX1MinusXw);
+  Annotate(hAllPairX1MinusXw, "m");
   allXwGeometryCanvas->cd(3);
   hAllOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hAllOutOfPlaneAngle);
+  Annotate(hAllOutOfPlaneAngle, "degrees");
   allXwGeometryCanvas->cd(4);
   hBestAllPairXDiffVsX1.DrawCopy("COLZ");
   allXwGeometryCanvas->cd(5);
   hBestAllPairX1MinusXw.DrawCopy("HIST");
-  Annotate(hBestAllPairX1MinusXw);
+  Annotate(hBestAllPairX1MinusXw, "m");
   allXwGeometryCanvas->cd(6);
   hBestAllOutOfPlaneAngle.DrawCopy("HIST");
-  Annotate(hBestAllOutOfPlaneAngle);
+  Annotate(hBestAllOutOfPlaneAngle, "degrees");
   allXwGeometryCanvas->Update();
   if (savePlots) {
     allXwGeometryCanvas->SaveAs(outputPrefix+"_geometry_xw_all.pdf");

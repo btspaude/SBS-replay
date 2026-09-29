@@ -104,6 +104,10 @@ pairs; the lower row uses the best pair per event for the selected Layer-1 bar.
 The macro reports the full-sample standard deviation and its ROOT moment-based
 error; it does not perform a Gaussian fit.
 
+Timing annotations and terminal summaries are labeled in ns. Position-residual
+annotations are labeled in m, and out-of-plane angle annotations are labeled in
+degrees. This avoids applying the timing unit to the geometry panels.
+
 The current display range for the ECal pair residual is `-40` to `0 ns`. This
 is a display range, while the ellipse uses the residual centered near `-26 ns`.
 

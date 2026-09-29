@@ -27,29 +27,29 @@ inline void Prepare(TH1D &h) {
   h.SetLineWidth(2);
 }
 
-inline void Report(const TH1D &h) {
+inline void Report(const TH1D &h, const char *unit = "ns") {
   std::cout << h.GetName() << ": N=" << h.GetEntries();
   if (h.GetEntries() >= 2)
-    std::cout << ", mean=" << h.GetMean() << " ns, std dev=" << h.GetStdDev()
-              << " +/- " << h.GetStdDevError() << " ns";
+    std::cout << ", mean=" << h.GetMean() << " " << unit << ", std dev="
+              << h.GetStdDev() << " +/- " << h.GetStdDevError() << " " << unit;
   else
     std::cout << ", insufficient entries for a width";
   std::cout << ", underflow=" << h.GetBinContent(0)
             << ", overflow=" << h.GetBinContent(h.GetNbinsX()+1) << '\n';
 }
 
-inline TString WidthLabel(const TH1D &h) {
+inline TString WidthLabel(const TH1D &h, const char *unit = "ns") {
   if (h.GetEntries() < 2)
     return "insufficient entries";
-  return TString::Format("SD = %.3f #pm %.3f ns", h.GetStdDev(), h.GetStdDevError());
+  return TString::Format("SD = %.3f #pm %.3f %s", h.GetStdDev(), h.GetStdDevError(), unit);
 }
 
-inline void Annotate(const TH1D &h) {
+inline void Annotate(const TH1D &h, const char *unit = "ns") {
   auto *box = new TPaveText(0.48, 0.71, 0.89, 0.89, "NDC");
   box->SetFillColor(0);
   box->SetBorderSize(0);
   box->AddText(TString::Format("N = %.0f", h.GetEntries()));
-  box->AddText(WidthLabel(h));
+  box->AddText(WidthLabel(h, unit));
   box->Draw();
 }
 
