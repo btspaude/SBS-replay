@@ -18,6 +18,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -39,8 +40,7 @@ bool HasRequiredBranches(TChain &chain) {
       "earm.cdet.pulse.broad_quality_pass",
       "earm.cdet.pulse.ecal_eligible", "earm.cdet.pulse.spatial_pass",
       "earm.cdet.pulse.x_corr", "earm.cdet.pulse.y",
-      "earm.cdet.pulse.z",
-      "earm.cdet.pair.pulse_index_l1", "earm.cdet.pair.pulse_index_l2"};
+      "earm.cdet.pulse.z"};
 
   chain.LoadTree(0);
   for (const char *name : required) {
@@ -49,6 +49,17 @@ bool HasRequiredBranches(TChain &chain) {
                 << std::endl;
       return false;
     }
+  }
+  const bool hasNativePairs =
+      chain.GetBranch("earm.cdet.pair_candidate.pulse_index_l1") &&
+      chain.GetBranch("earm.cdet.pair_candidate.pulse_index_l2");
+  const bool hasLegacyPairs = chain.GetBranch("earm.cdet.pair.pulse_index_l1") &&
+                              chain.GetBranch("earm.cdet.pair.pulse_index_l2");
+  if (!hasNativePairs && !hasLegacyPairs) {
+    std::cerr << "[good-pulse TDC] Missing both pair_candidate.* and pair.* "
+                 "source branches."
+              << std::endl;
+    return false;
   }
   return true;
 }
@@ -88,7 +99,9 @@ void DrawBarPage(TCanvas *canvas, const std::vector<TH1D *> &histograms,
 // calib_valid, broad_quality_pass, ecal_eligible, and spatial_pass.  An event
 // contributes to the legacy-comparison timing views only if its accepted
 // candidates include both CDet layers.  A separate diagnostic studies
-// exclusive one-layer recovery in events without a selected pair.
+// exclusive one-layer recovery in events without a selected pair. New trees
+// use analyzer-produced pair_candidate.* and single_candidate.* collections;
+// older trees fall back to the historical macro-level reconstruction.
 //
 // Example:
 // root -l -b -q 'Plot_CDet_GoodPulseCandidates_AllTDC.C+(5710,"/path/to/Rootfiles","CDet_run5710_good_pulse_tdc")'
@@ -227,6 +240,11 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
       "Trajectory-time selected pair mean, all CDet;"
       "t_{ECal} - <t_{CDet,corr}>_{pair} (ns);Selected pairs",
       nBar30DeltaTBins, bar30DeltaTMinNs, bar30DeltaTMaxNs);
+  TH1D hSelectedPairMeanCorrectedLE(
+      "hCDetSelectedPairMeanCorrectedLE",
+      "Trajectory-time selected pair mean, all CDet;"
+      "<t_{CDet,corr}>_{pair} (ns);Selected pairs",
+      nLEBins, leMinNs, leMaxNs);
   TH2D hSelectedPairMeanResidualVsMeanToT(
       "hCDetSelectedPairMeanECalResidualVsMeanToT",
       "Trajectory-time selected pair mean, all CDet;"
@@ -399,10 +417,59 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
   TTreeReaderArray<Double_t> correctedX(reader, "earm.cdet.pulse.x_corr");
   TTreeReaderArray<Double_t> pulseY(reader, "earm.cdet.pulse.y");
   TTreeReaderArray<Double_t> pulseZ(reader, "earm.cdet.pulse.z");
-  TTreeReaderArray<Double_t> pairPulseIndexL1(
-      reader, "earm.cdet.pair.pulse_index_l1");
-  TTreeReaderArray<Double_t> pairPulseIndexL2(
-      reader, "earm.cdet.pair.pulse_index_l2");
+  const bool useAnalyzerPairCandidates =
+      chain.GetBranch("earm.cdet.pair_candidate.pulse_index_l1") &&
+      chain.GetBranch("earm.cdet.pair_candidate.pulse_index_l2");
+  const bool useAnalyzerSingleCandidates =
+      chain.GetBranch("earm.cdet.single_candidate.pulse_index") &&
+      chain.GetBranch("earm.cdet.single_candidate.layer") &&
+      chain.GetBranch("earm.cdet.single_candidate.ecal_residual") &&
+      chain.GetBranch("earm.cdet.single_candidate.x_residual");
+  const bool hasROIStatus = chain.GetBranch("earm.cdet.roi.status");
+  const char *pairIndexL1Branch = useAnalyzerPairCandidates
+      ? "earm.cdet.pair_candidate.pulse_index_l1"
+      : "earm.cdet.pair.pulse_index_l1";
+  const char *pairIndexL2Branch = useAnalyzerPairCandidates
+      ? "earm.cdet.pair_candidate.pulse_index_l2"
+      : "earm.cdet.pair.pulse_index_l2";
+  TTreeReaderArray<Double_t> pairPulseIndexL1(reader, pairIndexL1Branch);
+  TTreeReaderArray<Double_t> pairPulseIndexL2(reader, pairIndexL2Branch);
+  std::unique_ptr<TTreeReaderArray<Double_t>> singlePulseIndex;
+  std::unique_ptr<TTreeReaderArray<Double_t>> singleLayer;
+  std::unique_ptr<TTreeReaderArray<Double_t>> singleECalResidual;
+  std::unique_ptr<TTreeReaderArray<Double_t>> singleXResidual;
+  std::unique_ptr<TTreeReaderArray<Double_t>> candidateGreedySelected;
+  std::unique_ptr<TTreeReaderArray<Double_t>> candidateSelectedPairIndex;
+  std::unique_ptr<TTreeReaderArray<Double_t>> selectedPairPulseIndexL1;
+  std::unique_ptr<TTreeReaderArray<Double_t>> selectedPairPulseIndexL2;
+  std::unique_ptr<TTreeReaderValue<Double_t>> roiStatus;
+  if (useAnalyzerPairCandidates &&
+      chain.GetBranch("earm.cdet.pair_candidate.greedy_selected") &&
+      chain.GetBranch("earm.cdet.pair_candidate.selected_pair_index") &&
+      chain.GetBranch("earm.cdet.pair.pulse_index_l1") &&
+      chain.GetBranch("earm.cdet.pair.pulse_index_l2")) {
+    candidateGreedySelected.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.pair_candidate.greedy_selected"));
+    candidateSelectedPairIndex.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.pair_candidate.selected_pair_index"));
+    selectedPairPulseIndexL1.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.pair.pulse_index_l1"));
+    selectedPairPulseIndexL2.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.pair.pulse_index_l2"));
+  }
+  if (useAnalyzerSingleCandidates) {
+    singlePulseIndex.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.single_candidate.pulse_index"));
+    singleLayer.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.single_candidate.layer"));
+    singleECalResidual.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.single_candidate.ecal_residual"));
+    singleXResidual.reset(new TTreeReaderArray<Double_t>(
+        reader, "earm.cdet.single_candidate.x_residual"));
+  }
+  if (hasROIStatus)
+    roiStatus.reset(
+        new TTreeReaderValue<Double_t>(reader, "earm.cdet.roi.status"));
   TTreeReaderArray<Double_t> legacyPMT(reader, "earm.cdet.hit.pmtnum");
   TTreeReaderArray<Double_t> legacyLE(reader, "earm.cdet.hit.tdc_le");
   TTreeReaderArray<Double_t> legacyToT(reader, "earm.cdet.hit.tdc_tot");
@@ -455,6 +522,12 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
   Long64_t ellipseCombinationFailsHardGatesEventCount = 0;
   Long64_t greedyPairingLostEllipseCombinationEventCount = 0;
   Long64_t allCombinationRecoveredPairCount = 0;
+  Long64_t analyzerSingleCandidateEventCount = 0;
+  Long64_t pairClassificationCountMismatch = 0;
+  Long64_t pairClassificationIdentityMismatch = 0;
+  Long64_t singleCandidateCountMismatch = 0;
+  Long64_t singleCandidateIdentityMismatch = 0;
+  Long64_t roiStatusMismatch = 0;
   constexpr double kECalZFromTargetM = 6.144;
   constexpr double kAnalyzerPairDeltaTimeMaxNs = 15.0;
   constexpr double kAnalyzerPairDeltaXMaxM = 0.15;
@@ -472,6 +545,9 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
     if (nPulses != maxPulses)
       ++malformedEvents;
     pulseCount += nPulses;
+    const bool passesECalTime =
+        std::isfinite(*ecalTime) && *ecalTime >= ecalTimeMinNs &&
+        *ecalTime <= ecalTimeMaxNs;
 
     // Analyzer-native reproduction of the historical Bar 30 timing canvas.
     // The saved residual has the desired historical sign, ECal minus CDet.
@@ -482,6 +558,33 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
       std::unordered_set<size_t> trajectoryTimeSelectedPulseIndices;
       const size_t nPairs =
           std::min(pairPulseIndexL1.GetSize(), pairPulseIndexL2.GetSize());
+      if (candidateGreedySelected) {
+        const size_t nClassified = std::min(
+            {nPairs, candidateGreedySelected->GetSize(),
+             candidateSelectedPairIndex->GetSize()});
+        size_t selectedCandidateCount = 0;
+        for (size_t candidate = 0; candidate < nClassified; ++candidate) {
+          if ((*candidateGreedySelected)[candidate] <= 0.5)
+            continue;
+          ++selectedCandidateCount;
+          const Long64_t selectedIndex =
+              std::llround((*candidateSelectedPairIndex)[candidate]);
+          if (selectedIndex < 0 ||
+              selectedIndex >=
+                  static_cast<Long64_t>(selectedPairPulseIndexL1->GetSize()) ||
+              selectedIndex >=
+                  static_cast<Long64_t>(selectedPairPulseIndexL2->GetSize()) ||
+              std::llround(pairPulseIndexL1[candidate]) !=
+                  std::llround((*selectedPairPulseIndexL1)[selectedIndex]) ||
+              std::llround(pairPulseIndexL2[candidate]) !=
+                  std::llround((*selectedPairPulseIndexL2)[selectedIndex]))
+            ++pairClassificationIdentityMismatch;
+        }
+        if (nClassified != nPairs ||
+            selectedCandidateCount != selectedPairPulseIndexL1->GetSize() ||
+            selectedCandidateCount != selectedPairPulseIndexL2->GetSize())
+          ++pairClassificationCountMismatch;
+      }
       double bestTrajectoryAbsResidual = std::numeric_limits<double>::infinity();
       double bestTrajectoryResidual = std::numeric_limits<double>::quiet_NaN();
       for (size_t pair = 0; pair < nPairs; ++pair) {
@@ -517,7 +620,8 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
           const double normalizedTiming =
               (pairTimingResidual - pairTimingCenterNs) /
               pairTimingScaleNs;
-          if (normalizedResidual * normalizedResidual +
+          if (passesECalTime &&
+              normalizedResidual * normalizedResidual +
                   normalizedTiming * normalizedTiming <=
               pairCutRadius * pairCutRadius) {
             trajectoryTimeSelectedPulseIndices.insert(
@@ -525,6 +629,10 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
             trajectoryTimeSelectedPulseIndices.insert(
                 static_cast<size_t>(indexL2));
             hSelectedPairMeanResidual.Fill(pairTimingResidual);
+            const double pairMeanCorrectedLE =
+                0.5 * (le[indexL1] + le[indexL2]);
+            if (std::isfinite(pairMeanCorrectedLE))
+              hSelectedPairMeanCorrectedLE.Fill(pairMeanCorrectedLE);
             const double pairMeanToT =
                 0.5 * (tot[indexL1] + tot[indexL2]);
             if (std::isfinite(pairMeanToT))
@@ -554,8 +662,7 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
       // cuts one mutually exclusive CDet outcome.  "Calibrated" means a
       // complete analyzer pulse with valid calibration; "good" additionally
       // requires broad quality, ECal eligibility, and spatial compatibility.
-      if (std::isfinite(*ecalTime) && *ecalTime >= ecalTimeMinNs &&
-          *ecalTime <= ecalTimeMaxNs) {
+      if (passesECalTime) {
         ++ecalAdmittedEventCount;
         bool calibratedLayer1 = false;
         bool calibratedLayer2 = false;
@@ -837,10 +944,9 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
         }
       }
 
-      // Study single-layer recovery only in events that have no final
-      // trajectory-time-selected pair.  Require the complete good-pulse
-      // selection and exactly one populated CDet layer, keeping this sample
-      // exclusive from both the paired population and two-layer ambiguities.
+      // Reconstruct the historical single-layer definition independently for
+      // diagnostics and regression testing. On new trees, the selected sample
+      // itself comes from SBSCDet's single_candidate.* collection.
       if (!hasTrajectoryTimeSelectedPair) {
         std::vector<size_t> goodLayer1Indices;
         std::vector<size_t> goodLayer2Indices;
@@ -875,7 +981,7 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
           else
             ++pairlessSingleLayer2EventCount;
 
-          bool recoveredEvent = false;
+          std::vector<size_t> reconstructedSelectedIndices;
           for (size_t i : indices) {
             const double projectedECalX =
                 *ecalX * pulseZ[i] / kECalZFromTargetM;
@@ -892,21 +998,65 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
             if (normalizedX * normalizedX +
                     normalizedTiming * normalizedTiming <=
                 singleCutRadius * singleCutRadius) {
-              selectedTiming.Fill(timingResidual);
-              recoveredEvent = true;
-              if (layer1Only)
-                ++recoveredSingleLayer1PulseCount;
-              else
-                ++recoveredSingleLayer2PulseCount;
+              reconstructedSelectedIndices.push_back(i);
             }
           }
-          if (recoveredEvent) {
+
+          std::vector<size_t> selectedIndices = reconstructedSelectedIndices;
+          if (useAnalyzerSingleCandidates) {
+            selectedIndices.clear();
+            const size_t nNativeSingles = std::min(
+                {singlePulseIndex->GetSize(), singleLayer->GetSize(),
+                 singleECalResidual->GetSize(), singleXResidual->GetSize()});
+            if (nNativeSingles > 0)
+              ++analyzerSingleCandidateEventCount;
+            for (size_t candidate = 0; candidate < nNativeSingles;
+                 ++candidate) {
+              if (!std::isfinite((*singlePulseIndex)[candidate]) ||
+                  !std::isfinite((*singleLayer)[candidate]))
+                continue;
+              const Long64_t sourceIndex =
+                  std::llround((*singlePulseIndex)[candidate]);
+              const int nativeLayer =
+                  int(std::lround((*singleLayer)[candidate]));
+              if (sourceIndex < 0 ||
+                  sourceIndex >= static_cast<Long64_t>(nPulses) ||
+                  nativeLayer != (layer1Only ? 0 : 1))
+                continue;
+              selectedIndices.push_back(static_cast<size_t>(sourceIndex));
+            }
+            std::sort(selectedIndices.begin(), selectedIndices.end());
+            std::sort(reconstructedSelectedIndices.begin(),
+                      reconstructedSelectedIndices.end());
+            if (selectedIndices.size() != reconstructedSelectedIndices.size())
+              ++singleCandidateCountMismatch;
+            else if (selectedIndices != reconstructedSelectedIndices)
+              ++singleCandidateIdentityMismatch;
+          }
+
+          for (size_t i : selectedIndices) {
+            selectedTiming.Fill(ecalResidual[i]);
+            if (layer1Only)
+              ++recoveredSingleLayer1PulseCount;
+            else
+              ++recoveredSingleLayer2PulseCount;
+          }
+          if (!selectedIndices.empty()) {
             if (layer1Only)
               ++recoveredSingleLayer1EventCount;
             else
               ++recoveredSingleLayer2EventCount;
           }
         }
+      }
+
+      if (roiStatus) {
+        const int expectedStatus = nPairs > 0 ? 1 :
+            (useAnalyzerSingleCandidates && singlePulseIndex->GetSize() > 0
+                 ? int(std::lround((*singleLayer)[0])) + 2
+                 : 0);
+        if (int(std::lround(**roiStatus)) != expectedStatus)
+          ++roiStatusMismatch;
       }
       const bool hasAcceptedPair = !pairedPulseIndices.empty();
       bool hasDetectorBaseline = false;
@@ -1126,6 +1276,59 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
                         outputDirectory));
   cDetector.SaveAs(Form("%s/CDetGoodPulse_Detector_Amalgamated.png",
                         outputDirectory));
+
+  // Unlike the ECal-minus-CDet residual, the absolute corrected pair-mean
+  // time isolates movement of the CDet timing origin from movement of the
+  // ECal centroid. Fit a narrow local core around the modal bin and display
+  // the conventional 30 ns timing reference. This trajectory-selected sample
+  // is not identical to the projected-half-bar shift-calibration sample, so
+  // compare like-for-like reference runs before changing shift_ns.
+  int pairMeanModeBin = hSelectedPairMeanCorrectedLE.GetMaximumBin();
+  const double pairMeanMode =
+      hSelectedPairMeanCorrectedLE.GetBinCenter(pairMeanModeBin);
+  const double pairMeanFitMin = std::max(leMinNs, pairMeanMode - 5.0);
+  const double pairMeanFitMax = std::min(leMaxNs, pairMeanMode + 5.0);
+  const double pairMeanBackground = 0.5 *
+      (hSelectedPairMeanCorrectedLE.GetBinContent(
+           hSelectedPairMeanCorrectedLE.FindBin(pairMeanFitMin)) +
+       hSelectedPairMeanCorrectedLE.GetBinContent(
+           hSelectedPairMeanCorrectedLE.FindBin(pairMeanFitMax)));
+  TF1 selectedPairMeanFit("fCDetSelectedPairMeanCorrectedLE",
+                          "gaus(0)+pol1(3)", pairMeanFitMin,
+                          pairMeanFitMax);
+  selectedPairMeanFit.SetParameters(
+      std::max(1.0, hSelectedPairMeanCorrectedLE.GetMaximum() -
+                        pairMeanBackground),
+      pairMeanMode, 3.0, pairMeanBackground, 0.0);
+  selectedPairMeanFit.SetParLimits(2, 0.2, 10.0);
+  selectedPairMeanFit.SetLineColor(kRed + 1);
+  int selectedPairMeanFitStatus = -1;
+  if (hSelectedPairMeanCorrectedLE.GetEntries() >= 20)
+    selectedPairMeanFitStatus = static_cast<int>(
+        hSelectedPairMeanCorrectedLE.Fit(&selectedPairMeanFit, "RQ0"));
+
+  TCanvas cSelectedPairMeanTime(
+      "cCDetGoodPulseSelectedPairMeanTime",
+      "Absolute corrected CDet selected-pair mean time", 1400, 650);
+  cSelectedPairMeanTime.Divide(2, 1);
+  for (int pad = 1; pad <= 2; ++pad) {
+    cSelectedPairMeanTime.cd(pad);
+    if (pad == 2) gPad->SetLogy();
+    hSelectedPairMeanCorrectedLE.SetLineColor(kBlack);
+    hSelectedPairMeanCorrectedLE.SetLineWidth(2);
+    hSelectedPairMeanCorrectedLE.Draw("HIST");
+    if (selectedPairMeanFitStatus == 0) selectedPairMeanFit.Draw("same");
+    gPad->Update();
+    TLine targetLine(30.0, gPad->GetUymin(), 30.0, gPad->GetUymax());
+    targetLine.SetLineColor(kBlue + 1);
+    targetLine.SetLineStyle(2);
+    targetLine.SetLineWidth(3);
+    targetLine.DrawClone("same");
+  }
+  cSelectedPairMeanTime.SaveAs(Form(
+      "%s/CDetGoodPulse_SelectedPairMeanCorrectedLE.pdf", outputDirectory));
+  cSelectedPairMeanTime.SaveAs(Form(
+      "%s/CDetGoodPulse_SelectedPairMeanCorrectedLE.png", outputDirectory));
 
   TCanvas cPairSlope("cCDetGoodPulsePairSlopeDiagnostics",
                      "CDet pair trajectory diagnostics", 1200, 500);
@@ -1379,6 +1582,7 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
   hDetectorProjectedQuality.Write();
   hDetectorProjectedQualityVsToT.Write();
   hSelectedPairMeanResidual.Write();
+  hSelectedPairMeanCorrectedLE.Write();
   hSelectedPairMeanResidualVsMeanToT.Write();
   hSelectedPairXCorrelation.Write();
   hSelectedPairXResidual.Write();
@@ -1408,6 +1612,13 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
 
   std::cout << "\n[good-pulse TDC] Files/events/pulses: " << filesAdded << "/"
             << eventCount << "/" << pulseCount << std::endl;
+  std::cout << "[good-pulse TDC] Candidate source: pairs="
+            << (useAnalyzerPairCandidates ? "analyzer pair_candidate.*"
+                                          : "legacy pair.* fallback")
+            << ", singles="
+            << (useAnalyzerSingleCandidates ? "analyzer single_candidate.*"
+                                             : "macro reconstruction fallback")
+            << std::endl;
   std::cout << "[good-pulse TDC] Accepted calibrated good pulse candidates: "
             << goodPulseCount << std::endl;
   std::cout << "[good-pulse TDC] Population mode: "
@@ -1427,8 +1638,18 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
             << detectorProjectedEventCount << std::endl;
   std::cout << "[good-pulse TDC] ECal-energy events contributing trajectory-time selected pair members: "
             << detectorProjectedQualityEventCount << std::endl;
-  std::cout << "[good-pulse TDC] Accepted one-to-one Layer-1/Layer-2 pairs in ECal-energy events: "
+  std::cout << "[good-pulse TDC] "
+            << (useAnalyzerPairCandidates
+                    ? "Accepted Layer-1/Layer-2 pair hypotheses"
+                    : "Accepted one-to-one Layer-1/Layer-2 pairs")
+            << " in ECal-energy events: "
             << acceptedPairCount << std::endl;
+  if (candidateGreedySelected) {
+    std::cout << "[good-pulse TDC] Analyzer pair-classification regression: "
+              << "count-mismatch events=" << pairClassificationCountMismatch
+              << ", identity mismatches="
+              << pairClassificationIdentityMismatch << std::endl;
+  }
   std::cout << "[good-pulse TDC] Trajectory-time ellipse: center=("
             << pairResidualCenterM << " m, " << pairTimingCenterNs
             << " ns), scales=(" << pairResidualScaleM << " m, "
@@ -1439,6 +1660,18 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
   std::cout << "[good-pulse TDC] Selected pair-mean timing entries: "
             << static_cast<Long64_t>(hSelectedPairMeanResidual.GetEntries())
             << std::endl;
+  std::cout << "[good-pulse TDC] Absolute selected-pair mean CDet time: "
+            << "mode=" << pairMeanMode << " ns, local-fit status="
+            << selectedPairMeanFitStatus;
+  if (selectedPairMeanFitStatus == 0) {
+    std::cout << ", peak=" << selectedPairMeanFit.GetParameter(1)
+              << " +/- " << selectedPairMeanFit.GetParError(1)
+              << " ns, sigma=" << selectedPairMeanFit.GetParameter(2)
+              << " +/- " << selectedPairMeanFit.GetParError(2) << " ns"
+              << ", chi2/NDF=" << selectedPairMeanFit.GetChisquare() << "/"
+              << selectedPairMeanFit.GetNDF();
+  }
+  std::cout << std::endl;
   std::cout << "[good-pulse TDC] Single-layer recovery ellipse: center=("
             << singleResidualCenterM << " m, " << singleTimingCenterNs
             << " ns), scales=(" << singleResidualScaleM << " m, "
@@ -1452,6 +1685,23 @@ void Plot_CDet_GoodPulseCandidates_AllTDC(
             << pairlessSingleLayer2EventCount << " / "
             << recoveredSingleLayer2EventCount << " / "
             << recoveredSingleLayer2PulseCount << std::endl;
+  if (useAnalyzerSingleCandidates) {
+    if (analyzerSingleCandidateEventCount > 0) {
+      std::cout << "[good-pulse TDC] Analyzer single-candidate regression: events="
+                << analyzerSingleCandidateEventCount
+                << ", count mismatches=" << singleCandidateCountMismatch
+                << ", identity mismatches=" << singleCandidateIdentityMismatch
+                << std::endl;
+    } else {
+      std::cout << "[good-pulse TDC] Analyzer single_candidate.* is present "
+                   "but empty; regression is not applicable (selection may "
+                   "be disabled by database policy)."
+                << std::endl;
+    }
+  }
+  if (roiStatus)
+    std::cout << "[good-pulse TDC] ROI-status consistency mismatches: "
+              << roiStatusMismatch << std::endl;
   std::cout << "[good-pulse TDC] ECal-admitted event outcome denominator ("
             << ecalTimeMinNs << " < t_ECal < " << ecalTimeMaxNs
             << " ns): " << ecalAdmittedEventCount << std::endl;

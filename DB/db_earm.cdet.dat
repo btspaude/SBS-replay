@@ -1082,13 +1082,15 @@ earm.cdet.zpos =
 5.850 5.850 5.850 -999.000 5.850 5.850 5.850 -999.000 5.850 5.850 5.850 5.850 5.850 5.850 5.850 5.850 
 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 999.000 
 
--------[ 2025-08-07 01:26:21 ] # Run 5710 CDet timing calibration
+-------[ 2025-05-09 10:09:25 ] # Five-pass CDet common calibration; Run 3573
 
-# The timing calibration is deliberately enabled only for Run 5710's
-# timestamp validity interval. Values migrated from
+# Common detector constants are valid throughout the five-pass data set.
+# Values migrated from
 # scripts/cdet/CDet_calibration_dt.dat (Ben Spaude's merged Run 5710 master)
-# and CDet_run5710.dat. The superseded master is retained as
-# CDet_calibration_dt_pre_btspaude_5710.dat.
+# are combined here with the fitted Run 3573 target-dependent values. Only
+# p1, shift_ns, the ECal timing window, and target-dependent pairing and
+# single-layer switches are overridden by the timestamp blocks below. The
+# superseded master is retained as CDet_calibration_dt_pre_btspaude_5710.dat.
 earm.cdet.timing.enable = 1
 earm.cdet.timing.tdc_to_ns = 0.01
 earm.cdet.timing.ecal_p0 = 14.828392
@@ -1098,7 +1100,7 @@ earm.cdet.timing.timewalk_p1_l1 = 14.297409
 earm.cdet.timing.timewalk_p1_l2 = 15.642601
 earm.cdet.timing.timewalk_totref_l1 = 12.000000
 earm.cdet.timing.timewalk_totref_l2 = 12.000000
-earm.cdet.timing.shift_ns = 1.195534
+earm.cdet.timing.shift_ns = -7.951543
 
 # Diagnostic-only pulse-quality and ECal-projection decisions. These keys do
 # not remove pulses or change the existing hit collections.
@@ -1107,8 +1109,8 @@ earm.cdet.selection.le_min = 0.02
 earm.cdet.selection.le_max = 60.0
 earm.cdet.selection.tot_min = 4.0
 earm.cdet.selection.tot_max = 30.0
-earm.cdet.selection.ecal_time_min = 10.0
-earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.selection.ecal_time_min = -15.0
+earm.cdet.selection.ecal_time_max = 30.0
 earm.cdet.selection.ecal_x_min = -1.5
 earm.cdet.selection.ecal_x_max = 1.5
 earm.cdet.selection.ecal_y_min = -1.2
@@ -1134,6 +1136,7 @@ earm.cdet.pairing.time_scale = 1.0
 earm.cdet.pairing.x_scale = 0.01
 earm.cdet.pairing.allow_multiple = 1
 earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
 earm.cdet.pairing.ecal_trajectory_center = 0.0
 earm.cdet.pairing.ecal_timing_center = -26.0
 earm.cdet.pairing.ecal_trajectory_scale = 0.020
@@ -1144,6 +1147,15 @@ earm.cdet.pairing.opposite_dy_center = 0.51
 earm.cdet.pairing.opposite_dy_tolerance = 0.08
 earm.cdet.pairing.opposite_projected_y_center = 0.0
 earm.cdet.pairing.opposite_projected_y_max = 0.17
+
+# Exclusive one-layer ROI candidates. The timestamp blocks keep this switch
+# synchronized with the hydrogen/cross-target selection policy. The numerical
+# working point is the radius-2 ellipse validated with the Run 6077 study.
+earm.cdet.single_layer.residual_center = 0.0
+earm.cdet.single_layer.timing_center = -26.0
+earm.cdet.single_layer.residual_scale = 0.040
+earm.cdet.single_layer.timing_scale = 5.0
+earm.cdet.single_layer.radius = 2.0
 
 earm.cdet.timing.pixel_offset =
 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000
@@ -1315,7 +1327,400 @@ earm.cdet.timing.pixel_offset =
 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000
 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000
 
--------[ 2025-08-07 02:06:54 ] # Run 5711 LH2 timing calibration
+# Five-pass run/target overrides. Cross-target runs use their individually
+# fitted shift_ns and the Ben-derived p1. Non-cross-target/LH2 intervals use
+# p1=0 and the common LH2 shift established for their timing era. Era 1
+# provisionally inherits the Era 2 LH2 shift pending a direct Era 1 study.
+
+-------[ 2025-05-09 10:24:52 ] # Run 3575 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -7.923126
+
+-------[ 2025-05-09 16:07:18 ] # Run 3584 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-10 02:02:13 ] # Run 3602 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.513324
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-10 07:35:36 ] # Run 3603 cross target
+earm.cdet.timing.shift_ns = -9.410302
+
+-------[ 2025-05-10 07:54:09 ] # Run 3604 cross target
+earm.cdet.timing.shift_ns = -9.545628
+
+-------[ 2025-05-10 08:34:27 ] # Run 3605 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-12 19:21:44 ] # Run 3648 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.392968
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-12 19:36:10 ] # Run 3649 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-13 23:38:29 ] # Run 3682 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.289546
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-13 23:45:20 ] # Run 3683 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-13 23:55:02 ] # Run 3685 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.290975
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-13 23:58:42 ] # Run 3686 cross target
+earm.cdet.timing.shift_ns = -9.304044
+
+-------[ 2025-05-14 00:39:09 ] # Run 3687 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-14 06:49:08 ] # Run 3694 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.377073
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-14 21:45:21 ] # Run 3755 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-15 05:35:30 ] # Run 3757 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.196209
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-15 05:46:19 ] # Run 3758 cross target
+earm.cdet.timing.shift_ns = -9.310615
+
+-------[ 2025-05-15 06:01:42 ] # Run 3759 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-17 01:09:35 ] # Run 3786 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.355028
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-17 01:32:28 ] # Run 3788 cross target
+earm.cdet.timing.shift_ns = -9.327031
+
+-------[ 2025-05-17 01:51:36 ] # Run 3789 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-18 16:52:02 ] # Run 3844 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.302666
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-18 17:17:01 ] # Run 3845 cross target
+earm.cdet.timing.shift_ns = -9.340197
+
+-------[ 2025-05-18 21:12:13 ] # Run 3846 cross target
+earm.cdet.timing.shift_ns = -9.247136
+
+-------[ 2025-05-18 21:35:41 ] # Run 3847 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-22 05:44:19 ] # Run 4003 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -9.440867
+earm.cdet.selection.ecal_time_min = 0.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-05-22 06:06:22 ] # Run 4006 cross target
+earm.cdet.timing.shift_ns = -9.467142
+
+-------[ 2025-05-22 13:00:42 ] # Run 4012 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -5.431483
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-05-24 07:09:25 ] # Run 4043 era-3 non-cross reset
+earm.cdet.timing.shift_ns = -6.666335
+
+-------[ 2025-06-04 21:20:29 ] # Run 4344 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -11.948600
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-04 21:43:01 ] # Run 4345 cross target
+earm.cdet.timing.shift_ns = -12.015219
+
+-------[ 2025-06-04 22:13:51 ] # Run 4346 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-06-06 17:46:34 ] # Run 4400 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -11.342080
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-06 18:22:12 ] # Run 4403 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-06-18 01:09:03 ] # Run 4722 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -11.247382
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-18 01:38:04 ] # Run 4724 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-06-18 13:45:09 ] # Run 4735 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -10.824968
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-18 14:22:20 ] # Run 4737 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-06-24 15:14:00 ] # Run 4926 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -11.104431
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-24 15:39:22 ] # Run 4929 cross target
+earm.cdet.timing.shift_ns = -10.998118
+
+-------[ 2025-06-24 16:10:15 ] # Run 4930 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-06-27 21:31:51 ] # Run 4985 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -10.996563
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-06-27 22:27:59 ] # Run 4988 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-07-02 21:28:46 ] # Run 5066 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -10.997412
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-07-02 21:59:47 ] # Run 5068 cross target
+earm.cdet.timing.shift_ns = -10.949305
+
+-------[ 2025-07-02 22:54:39 ] # Run 5072 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-07-15 21:37:34 ] # Run 5290 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -10.840211
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-07-15 21:51:45 ] # Run 5292 cross target
+earm.cdet.timing.shift_ns = -10.823386
+
+-------[ 2025-07-15 22:16:10 ] # Run 5294 cross target
+earm.cdet.timing.shift_ns = -10.878018
+
+-------[ 2025-07-15 22:32:33 ] # Run 5295 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-07-23 17:32:21 ] # Run 5423 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = -10.775195
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-07-23 17:59:25 ] # Run 5425 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = -6.666335
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-08-07 01:26:21 ] # Run 5710 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = 1.195534
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-08-07 02:06:54 ] # Run 5711 Era-4 LH2 reset
 
 # Pixel offsets, TDC conversion, ECal p0/delta, time-walk constants, geometry,
 # pulse-quality cuts, projection geometry, and pairing policy are inherited
@@ -1323,7 +1728,7 @@ earm.cdet.timing.pixel_offset =
 # timing shift, and the accepted ECal timing window vary for this run.
 earm.cdet.timing.enable = 1
 earm.cdet.timing.ecal_p1 = 0.000000
-earm.cdet.timing.shift_ns = 3.422000
+earm.cdet.timing.shift_ns = 4.387503
 
 earm.cdet.selection.enable = 1
 earm.cdet.selection.ecal_time_min = -10.0
@@ -1333,7 +1738,83 @@ earm.cdet.pairing.enable = 1
 # Apply the established radius-2 trajectory-time ellipse to every eligible
 # Layer-1/Layer-2 combination before deterministic one-to-one assignment.
 earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
 # Permit the physically adjacent left/right half-bar topology only for tracks
 # projected near the central seam. The ordinary 8 cm same-side gate remains
 # unchanged.
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-08-07 19:30:21 ] # Run 5722 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = 1.144480
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-08-07 19:35:49 ] # Run 5723 cross target
+earm.cdet.timing.shift_ns = 1.153213
+
+-------[ 2025-08-07 19:45:25 ] # Run 5724 cross target
+earm.cdet.timing.shift_ns = 1.132296
+
+-------[ 2025-08-07 19:52:24 ] # Run 5726 cross target
+earm.cdet.timing.shift_ns = 1.170911
+
+-------[ 2025-08-07 20:05:59 ] # Run 5727 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = 4.387503
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-08-10 16:50:37 ] # Run 5794 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = 0.965988
+earm.cdet.selection.ecal_time_min = 10.0
+earm.cdet.selection.ecal_time_max = 35.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-08-10 16:56:53 ] # Run 5795 cross target
+earm.cdet.timing.shift_ns = 1.005736
+
+-------[ 2025-08-10 17:39:36 ] # Run 5799 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = 4.387503
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-08-20 20:14:43 ] # Run 5992 cross target
+earm.cdet.timing.ecal_p1 = 0.810602
+earm.cdet.timing.shift_ns = 5.171530
+earm.cdet.selection.ecal_time_min = -15.0
+earm.cdet.selection.ecal_time_max = 15.0
+earm.cdet.pairing.ecal_rank_enable = 0
+earm.cdet.single_layer.enable = 0
+earm.cdet.pairing.opposite_side_enable = 0
+
+-------[ 2025-08-20 20:43:31 ] # Run 5994 non-cross reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = 4.387503
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
+earm.cdet.pairing.opposite_side_enable = 1
+
+-------[ 2025-08-24 05:58:38 ] # Run 6077 Era-4 LH2 reset
+earm.cdet.timing.ecal_p1 = 0.000000
+earm.cdet.timing.shift_ns = 4.387503
+earm.cdet.selection.ecal_time_min = -10.0
+earm.cdet.selection.ecal_time_max = 10.0
+earm.cdet.pairing.ecal_rank_enable = 1
+earm.cdet.single_layer.enable = 1
 earm.cdet.pairing.opposite_side_enable = 1

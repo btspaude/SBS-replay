@@ -22,6 +22,8 @@ struct FileNameInfo {
   int lastStream = -1;
   int firstSegment = -1;
   int lastSegment = -1;
+  int firstEvent = -1;
+  int eventCount = -1;
   int part = 0;
   bool isPart = false;
   TString stem;
@@ -36,6 +38,12 @@ inline bool ParseFileName(const TString &name, FileNameInfo &info) {
   const char *partFormats[] = {
       "cdet_%d_stream%d_%d_seg%d_%d_%d.root%n",
       "cdet_%d_stream_%d_%d_seg%d_%d_%d.root%n"};
+  const char *eventRangeFormats[] = {
+      "cdet_%d_stream%d_%d_seg%d_%d_firstevent%d_nevent%d.root%n",
+      "cdet_%d_stream_%d_%d_seg%d_%d_firstevent%d_nevent%d.root%n"};
+  const char *eventRangePartFormats[] = {
+      "cdet_%d_stream%d_%d_seg%d_%d_firstevent%d_nevent%d_%d.root%n",
+      "cdet_%d_stream_%d_%d_seg%d_%d_firstevent%d_nevent%d_%d.root%n"};
 
   for (const char *format : formats) {
     FileNameInfo candidate;
@@ -50,6 +58,20 @@ inline bool ParseFileName(const TString &name, FileNameInfo &info) {
     }
   }
 
+  for (const char *format : eventRangeFormats) {
+    FileNameInfo candidate;
+    consumed = 0;
+    if (std::sscanf(name.Data(), format, &candidate.run,
+                    &candidate.firstStream, &candidate.lastStream,
+                    &candidate.firstSegment, &candidate.lastSegment,
+                    &candidate.firstEvent, &candidate.eventCount,
+                    &consumed) == 7 && consumed == name.Length()) {
+      candidate.stem = name(0, name.Length() - 5);
+      info = candidate;
+      return true;
+    }
+  }
+
   for (const char *format : partFormats) {
     FileNameInfo candidate;
     consumed = 0;
@@ -58,6 +80,24 @@ inline bool ParseFileName(const TString &name, FileNameInfo &info) {
                     &candidate.firstStream, &candidate.lastStream,
                     &candidate.firstSegment, &candidate.lastSegment, &part,
                     &consumed) == 6 && consumed == name.Length() && part > 0) {
+      candidate.part = part;
+      candidate.isPart = true;
+      const TString suffix = TString::Format("_%d.root", part);
+      candidate.stem = name(0, name.Length() - suffix.Length());
+      info = candidate;
+      return true;
+    }
+  }
+
+  for (const char *format : eventRangePartFormats) {
+    FileNameInfo candidate;
+    consumed = 0;
+    part = 0;
+    if (std::sscanf(name.Data(), format, &candidate.run,
+                    &candidate.firstStream, &candidate.lastStream,
+                    &candidate.firstSegment, &candidate.lastSegment,
+                    &candidate.firstEvent, &candidate.eventCount, &part,
+                    &consumed) == 8 && consumed == name.Length() && part > 0) {
       candidate.part = part;
       candidate.isPart = true;
       const TString suffix = TString::Format("_%d.root", part);

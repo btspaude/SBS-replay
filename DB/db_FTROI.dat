@@ -9,10 +9,20 @@ FTROI.zvertex_max = 0.09 # +9 cm (extra 3 cm for resolution tolerance)
 
 FTROI.earm_name = earm
 FTROI.edet_name = ecal
+FTROI.cdet_name = cdet
 FTROI.parm_name = sbs
 FTROI.pdet_name = gemFT
 
 FTROI.z0targ = -0.09
+
+# Working position uncertainties for diagnostic ECal+CDet electron-ray fits.
+# These diagnostics do not alter GEM constraints. The ECal values are the
+# presently reported resolutions; the CDet x value is the conservative Run
+# 5710 trajectory-residual width, and CDet y is one half-bar half-length.
+FTROI.sigma_x_ecal = 0.006
+FTROI.sigma_y_ecal = 0.006
+FTROI.sigma_x_cdet = 0.017973
+FTROI.sigma_y_cdet = 0.255
 
 ---------[ 2025-05-09 00:00:00 ] # start kin. 3
 
@@ -22,4 +32,3 @@ FTROI.z0targ = -0.1
 FTROI.nbins_zvertex = 24
 FTROI.zvertex_min = -0.28
 FTROI.zvertex_max = 0.08
-

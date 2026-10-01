@@ -54,6 +54,9 @@ void replay_gep(UInt_t runnum, Long_t nevents=-1, Long_t firstevent=1, const cha
     // // CDet
     SBSCDet* cdet =  new SBSCDet("cdet", "coordinate detector");
     cdet->SetStoreRawHits(kTRUE);
+    // Retain complete calibrated CDet pulses and build the detector-local
+    // pair/single-layer candidate collections consumed by FTROI diagnostics.
+    cdet->SetStorePulseCandidates(kTRUE);
     earm->AddDetector( cdet );
 
     gHaApps->Add(earm);
