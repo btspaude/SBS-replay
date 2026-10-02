@@ -128,11 +128,11 @@ void Plot_CDet_PixelTimingBeforeAfter(
     const char *configFile = "CDet_run5710_projection.conf", int pixel = 485,
     const char *outputDirectory = "cdet_timing_before_after",
     const char *inputDirectory = nullptr, Long64_t eventsOverride = -2,
-    double leBinWidth = 0.5, double leMin = 0, double leMax = 60,
-    double totBinWidth = 0.5, double totMin = 0, double totMax = 40,
+    double leBinWidth = 1, double leMin = 0, double leMax = 60,
+    double totBinWidth = 1, double totMin = 0, double totMax = 40,
     bool savePlots = true,
-    double dtBinWidth = 0.5, double dtMin = -60, double dtMax = 40,
-    double ecalBinWidth = 0.5, double ecalMin = -10, double ecalMax = 50,
+    double dtBinWidth = 1, double dtMin = -40, double dtMax = 10,
+    double ecalBinWidth = 1, double ecalMin = 5, double ecalMax = 40,
     double dtBeforeFitMin = -30, double dtBeforeFitMax = 10,
     double dtAfterFitMin = -30, double dtAfterFitMax = 10)
 {
