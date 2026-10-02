@@ -42,22 +42,30 @@ arguments at the end set the before/after DT fit windows:
 // before DT fit min/max, after DT fit min/max
 Plot_CDet_PixelTimingBeforeAfter(
     "CDet_run5710_projection.conf", 485, "dnp_run5710_bar30", nullptr, -2,
-    0.5, 0, 60, 0.5, 0, 40, true,
-    0.5, -60, 40, 0.5, -10, 50,
+    1.0, 0, 60, 1.0, 0, 40, true,
+    1.0, -40, 10, 1.0, 5, 40,
     -30, 10, -30, 10);
 ```
 
-The dt display defaults to −60 to 40 ns. The correlation plots use ECal time
-on the horizontal axis (−10 to 50 ns by default) and CDet LE on the vertical
-axis (the same `leMin/leMax` as the LE plots). Both new axes default to 0.5 ns
-bins. Existing shorter calls remain valid. The DT fits use the chosen DT
-binning; use `dtBinWidth=1.0` to match the production extractor's default
-bin width. Both fit windows default to −30 to +10 ns, matching the current
-cross-target extractor. Set them to the appropriate signal region for other
-timing conditions; for the local Run 6077 check, both were −45 to −10 ns.
-Fit-window limits must lie within the DT histogram, with the upper limit
-strictly below `dtMax` so its seed/count bin is not the overflow bin. Changing
-a fit window changes the fit and reference estimate, not the selected hits.
+The dt display defaults to −40 to +10 ns. The correlation plots use ECal time
+on the horizontal axis (5 to 40 ns by default) and CDet LE on the vertical
+axis (the same `leMin/leMax` as the LE plots). All timing axes default to 1 ns
+bins, following the 2026-10-02 ifarm update. Existing shorter calls remain valid.
+The DT fits use the chosen DT binning; the 1 ns default now matches the
+production extractor's default bin width. Both fit windows default to −30 to
++10 ns, matching the current cross-target extractor. Set them to the appropriate
+signal region for other timing conditions; for the local Run 6077 check, both
+were −45 to −10 ns.
+Fit-window limits must lie within the DT histogram; either endpoint may equal
+the corresponding histogram edge. ROOT maps a coordinate equal to the upper
+edge to its overflow bin, so the macro clamps the fit's counting and seed-bin
+indices to the visible bins. Out-of-range fit windows report the offending
+before/after interval and histogram limits explicitly. Changing a fit window
+changes the fit and reference estimate, not the selected hits.
+
+These are display ranges, not event cuts: for example, the ECal-time display
+does not replace `analysis.ecal_time_min/max`. For another run, choose a display
+range that includes its selected ECal times.
 
 The eight canvases remain open in interactive ROOT. Each saves as both PDF and
 PNG by default; `savePlots=false` displays them without saving. Default outputs:
@@ -249,3 +257,17 @@ diagnostic outputs and did not activate or overwrite calibration constants.
 Saved DT layouts were checked for Bar 30's low-statistics labels and Bar 27's
 accepted fits; the compact statistics and header reference remain clear of
 the histogram peaks.
+
+On 2026-10-02, the ifarm update changed the timing bins to 1 ns, the DT display
+to −40 to +10 ns, and the ECal-time display to 5–40 ns. The old validation
+incorrectly rejected the default fit endpoint of +10 ns when it equaled the
+histogram maximum. The fix allows matching endpoints and excludes overflow
+from the fit-entry count, peak search and background seed. A regression check
+failed before this fix and passed afterward: six fitted pixel signals and
+their detector reference stayed unchanged after adding one million counts
+to each underflow and overflow bin. A 20,000-event Run 6077 check produced all
+128 histograms with the updated binning/ranges and identical before/after
+populations. Invalid windows outside the histogram still fail with explicit
+range messages. A forced ACLiC rebuild also passed without the eight compiler
+warnings previously inherited from the master; index types and intentionally
+unused legacy arguments were cleaned up without changing selections.

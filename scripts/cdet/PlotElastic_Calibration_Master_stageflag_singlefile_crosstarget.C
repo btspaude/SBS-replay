@@ -3668,7 +3668,7 @@ void plotECalHCalTimeComp(double threshold = 200, int binSizeAmp = 100, int ampM
     if (paddleLE.size() != 1) continue;
     const double cdetLE = paddleLE[0];
     // Plot every ECal block position in that event against that one CDet time
-    for (int ihit = 0; ihit < v_ECal_adcxpos[ev].size(); ihit++) {
+    for (size_t ihit = 0; ihit < v_ECal_adcxpos[ev].size(); ihit++) {
       double ecalX = v_ECal_adcxpos[ev][ihit];
       double ecalAP = v_ECal_a_p[ev][ihit];
       if (ecalAP > threshold && hasPaddleA) hECalXVsCDetLE->Fill(cdetLE, ecalX);
@@ -4273,6 +4273,10 @@ void plotPaddleTOT(
     const std::vector<double>& externalTotSigmas = {}
 )
 {
+  // Retained for existing callers; this routine uses binTotLow/High and
+  // the fitted or external ToT cuts below, rather than these legacy limits.
+  (void)TotMin;
+  (void)TotMax;
   TH1::AddDirectory(kFALSE);
   int nTotBins = (int)((binTotHigh-binTotLow)/width);
   int nLeBins = (int)((binLeHigh-binLeLow)/width);
@@ -4302,7 +4306,7 @@ void plotPaddleTOT(
     hPaddleLe[paddle] = new TH1F(TString::Format("hBarLe_Paddle%d", global_paddle),
                                TString::Format("LE (Paddle %d)", global_paddle),
                                nLeBins, binLeLow, binLeHigh);
-    for (int ihit = 0; ihit < vPaddleGoodTot[global_paddle].size(); ++ihit){
+    for (size_t ihit = 0; ihit < vPaddleGoodTot[global_paddle].size(); ++ihit){
       double x = vPaddleGoodTot[global_paddle][ihit];
       double t_HCal = vPaddleMatchHCalTime[global_paddle][ihit];
       if (t_HCal >= hcalMinTime && t_HCal <= hcalMaxTime) hPaddleTot[paddle]->Fill(x);
@@ -4918,6 +4922,12 @@ void plotAllPaddles(double width = 1, double LeMin = 0, double LeMax = 60,
                     double TotMin = 0, double TotMax = 40,
                     double binLow = 0, double binHigh = 60, TString saveTag = "") {
 
+  // Compatibility arguments: the existing routine plots already-selected
+  // vectors with binLow/High and does not apply another LE or ToT selection.
+  (void)LeMin;
+  (void)LeMax;
+  (void)TotMin;
+  (void)TotMax;
   TH1::AddDirectory(kFALSE);
 
   const Bool_t previousBatchMode = gROOT->IsBatch();

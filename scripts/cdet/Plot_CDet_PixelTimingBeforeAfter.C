@@ -44,7 +44,10 @@ double FitDTSpectra(const std::vector<std::unique_ptr<TH1D>>& spectra,
   for (int first = 0; first < NumCDetPaddles; first += 8) {
     std::unique_ptr<TH1D> group(static_cast<TH1D*>(spectra[first]->Clone(TString(spectra[first]->GetName())+"_group")));
     group->SetDirectory(nullptr); group->Reset();
-    const int lo = group->FindBin(fitMin), hi = group->FindBin(fitMax);
+    // ROOT assigns x == histogram maximum to overflow. A fit may end at
+    // that edge, but its statistics, seed and background must use visible bins.
+    const int lo = std::max(1, group->FindFixBin(fitMin));
+    const int hi = std::min(group->GetNbinsX(), group->FindFixBin(fitMax));
     for (int channel = first; channel < first+8; ++channel)
       if (!IsUnusedPixel(channel) && spectra[channel]->Integral(lo, hi) > 0)
         group->Add(spectra[channel].get()); // Raw counts, not normalized pixels.
@@ -142,11 +145,21 @@ void Plot_CDet_PixelTimingBeforeAfter(
   const int nDT = dtBinWidth > 0 ? int(std::ceil((dtMax-dtMin)/dtBinWidth)) : 0;
   const int nECal = ecalBinWidth > 0 ? int(std::ceil((ecalMax-ecalMin)/ecalBinWidth)) : 0;
   if (pixel < 0 || pixel >= NumCDetPaddles || nLE <= 0 || nToT <= 0 || nDT <= 0 || nECal <= 0 ||
-      dtBeforeFitMin >= dtBeforeFitMax || dtBeforeFitMin < dtMin || dtBeforeFitMax >= dtMax ||
-      dtAfterFitMin >= dtAfterFitMax || dtAfterFitMin < dtMin || dtAfterFitMax >= dtMax ||
       (savePlots && (!outputDirectory || !outputDirectory[0]))) {
-    std::cerr << "[CDet before/after] Invalid pixel, histogram/fit range or output directory.\n";
+    std::cerr << "[CDet before/after] Invalid pixel, histogram range or output directory.\n";
     return;
+  }
+  const double fitMin[] = {dtBeforeFitMin, dtAfterFitMin};
+  const double fitMax[] = {dtBeforeFitMax, dtAfterFitMax};
+  for (int state = 0; state < 2; ++state) {
+    if (!std::isfinite(fitMin[state]) || !std::isfinite(fitMax[state]) ||
+        fitMin[state] >= fitMax[state] || fitMin[state] < dtMin || fitMax[state] > dtMax) {
+      std::cerr << "[CDet before/after] " << (state ? "After" : "Before")
+                << " DT fit range [" << fitMin[state] << ", " << fitMax[state]
+                << "] ns must be ordered and inside the DT histogram ["
+                << dtMin << ", " << dtMax << "] ns (equal endpoints are allowed).\n";
+      return;
+    }
   }
   TEnv env;
   if (!LoadCDetConfiguration(env, configFile, "CDet before/after")) return;
@@ -351,8 +364,6 @@ void Plot_CDet_PixelTimingBeforeAfter(
   std::array<std::vector<std::unique_ptr<TF1>>, 2> dtFits;
   std::array<std::vector<TString>, 2> dtFitNotes;
   double mu0[2]; TString referenceDescription[2];
-  const double fitMin[] = {dtBeforeFitMin, dtAfterFitMin};
-  const double fitMax[] = {dtBeforeFitMax, dtAfterFitMax};
   for (int state = 0; state < 2; ++state) {
     std::cout << "[CDet before/after] Fitting " << stage[state] << " detector DT spectra...\n";
     mu0[state] = CDetPixelTimingBeforeAfter::FitDTSpectra(
