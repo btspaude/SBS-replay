@@ -1,7 +1,7 @@
 // Six bar canvases and two full-detector timing-correlation canvases.
 // ROOT (from scripts/cdet, in a fresh session):
 //   .L Plot_CDet_PixelTimingBeforeAfter.C+
-//   Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 485);
+//   Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 469);
 // Any logical pixel 0..2687 selects its containing bar (pixel/16).
 // Bar canvases show its middle eight pixels (bar*16+4 through bar*16+11).
 // Reuse the master's configuration/calibration readers, constants and bad-pixel
@@ -129,7 +129,7 @@ double FitDTSpectra(const std::vector<std::unique_ptr<TH1D>>& spectra,
 } // namespace CDetPixelTimingBeforeAfter
 
 void Plot_CDet_PixelTimingBeforeAfter(
-    const char *configFile = "CDet_run5710_projection.conf", int pixel = 485,
+    const char *configFile = "CDet_run5710_projection.conf", int pixel = 469,
     const char *outputDirectory = "cdet_timing_before_after",
     const char *inputDirectory = nullptr, Long64_t eventsOverride = -2,
     double leBinWidth = 1, double leMin = 0, double leMax = 60,
@@ -380,8 +380,9 @@ void Plot_CDet_PixelTimingBeforeAfter(
     std::cout << "  mu_0 = " << mu0[state] << " ns (" << referenceDescription[state] << ")\n";
   }
 
-  // LE panels use independent count scales to avoid empty space when one
-  // sample has a much taller peak. Other before/after scales remain matched.
+  // Each LE/DT panel follows its own peak, including the displayed DT fit.
+  // Statistics sit above the frame, so only 5% count-axis headroom is needed.
+  // Keep the before/after 2D color scales matched.
   auto histogram = [&](int kind, int state, int p) -> TH1* {
     if (kind == 0) return hLE[state][p].get();
     if (kind == 1) return hLEToT[state][p].get();
@@ -389,17 +390,14 @@ void Plot_CDet_PixelTimingBeforeAfter(
   };
   double displayMax[2][3][16];
   for (int kind = 0; kind < 3; ++kind)
-    for (int p = 0; p < 16; ++p) {
-      double top = std::max(1.0,
-          std::max(histogram(kind, 0, p)->GetMaximum(), histogram(kind, 1, p)->GetMaximum()));
-      if (kind == 2)
-        for (int state = 0; state < 2; ++state)
-          if (dtFits[state][base+p]) top = std::max(top, dtFits[state][base+p]->GetMaximum());
-      for (int state = 0; state < 2; ++state)
-        displayMax[state][kind][p] = kind == 0
-            ? 1.15*std::max(1.0, histogram(kind, state, p)->GetMaximum())
-            : (kind == 1 ? top : 1.65*top);
-    }
+    for (int p = 0; p < 16; ++p)
+      for (int state = 0; state < 2; ++state) {
+        double top = std::max(1.0, histogram(kind, state, p)->GetMaximum());
+        if (kind == 1) top = std::max(top, histogram(kind, 1-state, p)->GetMaximum());
+        if (kind == 2 && dtFits[state][base+p])
+          top = std::max(top, dtFits[state][base+p]->GetMaximum());
+        displayMax[state][kind][p] = (kind == 1 ? 1.0 : 1.05)*top;
+      }
   const double correlationMax = std::max(1.0, std::max(hCDetECal[0]->GetMaximum(), hCDetECal[1]->GetMaximum()));
   const char *kind[] = {"le", "le_vs_tot", "ecal_cdet_dt"};
   const char *description[] = {"LE", "LE vs ToT", "ECal - CDet #Deltat"};
@@ -418,7 +416,7 @@ void Plot_CDet_PixelTimingBeforeAfter(
         const TString reference = std::isfinite(mu0[state])
             ? TString::Format("#mu_{0} = %.2f ns (%s)", mu0[state], referenceDescription[state].Data())
             : "#mu_{0} = n/a (no reliable detector reference)";
-        label.DrawLatex(0.035, 0.910, TString::Format("%s | %s sample | Red: Gaussian + linear background; broad fit [%.3g, %.3g] ns", reference.Data(), stage[state], fitMin[state], fitMax[state]));
+        label.DrawLatex(0.035, 0.910, TString::Format("%s | Red: Gaussian + linear background; broad fit [%.3g, %.3g] ns | Independent count axes", reference.Data(), fitMin[state], fitMax[state]));
       }
       TPad *grid = new TPad(name+"_grid", "", 0, 0, 1, plot == 1 ? 0.915 : 0.887);
       grid->Draw(); grid->Divide(4, 2, 0.002, 0.002);
@@ -426,35 +424,40 @@ void Plot_CDet_PixelTimingBeforeAfter(
       for (int p = 4; p < 12; ++p) {
         grid->cd(p-3);
         gPad->SetLeftMargin(0.15); gPad->SetBottomMargin(0.15);
-        gPad->SetRightMargin(twoD ? 0.15 : 0.04); gPad->SetTopMargin(0.11);
+        gPad->SetRightMargin(twoD ? 0.15 : 0.04);
+        gPad->SetTopMargin(twoD ? 0.11 : plot == 2 ? 0.26 : 0.17);
         TH1 *hist = histogram(plot, state, p);
         hist->SetMinimum(0); hist->SetMaximum(displayMax[state][plot][p]);
         hist->DrawCopy(twoD ? "COLZ" : "HIST");
         if (plot == 2 && !IsUnusedPixel(base+p)) {
           TF1 *fit = dtFits[state][base+p].get();
           if (fit) fit->DrawCopy("SAME");
-          label.SetTextSize(0.039); label.SetTextAlign(31);
+          // A compact header above the axes keeps fit text clear of the data.
+          label.SetTextSize(0.035); label.SetTextAlign(11);
           const TString counts = hist->GetEntries() > 1
               ? TString::Format("N = %.0f   SD = %.2f ns", hist->GetEntries(), hist->GetStdDev())
               : TString::Format("N = %.0f   SD = n/a", hist->GetEntries());
-          label.DrawLatex(0.94, 0.855, counts);
+          label.DrawLatex(0.16, 0.89, counts);
           if (fit) {
-            label.DrawLatex(0.94, 0.795, TString::Format("#mu_{i} = %.2f #pm %.2f ns", fit->GetParameter(1), fit->GetParError(1)));
-            label.DrawLatex(0.94, 0.735, TString::Format("#sigma_{fit} = %.2f #pm %.2f ns", std::fabs(fit->GetParameter(2)), fit->GetParError(2)));
-            label.DrawLatex(0.94, 0.675, TString::Format("#chi^{2}/NDF = %.2f%s", fit->GetChisquare()/fit->GetNDF(), dtFitNotes[state][base+p] == "individual_broad_fallback" ? " (broad fit)" : ""));
+            label.DrawLatex(0.16, 0.84, TString::Format("#mu_{i} = %.2f #pm %.2f ns", fit->GetParameter(1), fit->GetParError(1)));
+            label.DrawLatex(0.16, 0.79, TString::Format("#sigma_{fit} = %.2f #pm %.2f ns", std::fabs(fit->GetParameter(2)), fit->GetParError(2)));
+            label.SetTextSize(0.032); label.SetTextAlign(31);
+            label.DrawLatex(0.94, 0.89, TString::Format("#chi^{2}/NDF = %.2f", fit->GetChisquare()/fit->GetNDF()));
+            if (dtFitNotes[state][base+p] == "individual_broad_fallback")
+              label.DrawLatex(0.94, 0.84, "Broad fit");
           } else {
-            label.DrawLatex(0.94, 0.795, "#mu_{i}, #sigma_{fit} = n/a");
-            label.SetTextSize(0.035);
-            label.DrawLatex(0.94, 0.735, dtFitNotes[state][base+p]);
+            label.DrawLatex(0.16, 0.84, "#mu_{i}, #sigma_{fit} = n/a");
+            label.SetTextSize(0.032);
+            label.DrawLatex(0.16, 0.79, dtFitNotes[state][base+p]);
           }
           label.SetTextAlign(11);
         } else if (!twoD) {
-          // One compact line fits above the tallest bin with 15% headroom.
+          // Keep LE statistics above the frame as well.
           label.SetTextSize(0.039); label.SetTextAlign(31);
           const TString counts = hist->GetEntries() > 1
               ? TString::Format("N = %.0f   SD = %.2f ns", hist->GetEntries(), hist->GetStdDev())
               : TString::Format("N = %.0f   SD = n/a", hist->GetEntries());
-          label.DrawLatex(0.94, 0.84, counts);
+          label.DrawLatex(0.94, 0.87, counts);
           label.SetTextAlign(11);
         }
         if (IsUnusedPixel(base+p)) {

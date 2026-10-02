@@ -9,8 +9,9 @@
   offsets applied and one with the full timing calibration applied.
 
 Any logical pixel ID selects its containing 16-pixel bar: `bar = pixel / 16`.
-The bar canvases display pixel IDs `16*bar + 4` through `16*bar + 11`. For
-example, pixel 485 selects bar 30 and displays **484–491**. Layer 2 pixel IDs
+The bar canvases display pixel IDs `16*bar + 4` through `16*bar + 11`. The
+default selected pixel **469** selects bar 29 and displays **468–475**; its
+aligned bar base is 464. Layer 2 pixel IDs
 are also supported. Bar numbering is global, 0–167. The selected bar does not
 restrict the full-detector correlation or the detector-wide DT reference fits.
 
@@ -20,7 +21,7 @@ From `gocdetscripts` / `SBS-replay/scripts/cdet`, start a fresh ROOT session:
 
 ```cpp
 .L Plot_CDet_PixelTimingBeforeAfter.C+
-Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 485);
+Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 469);
 ```
 
 The existing run configuration supplies event limits, segment limits and
@@ -29,8 +30,8 @@ input directory and event limit:
 
 ```cpp
 Plot_CDet_PixelTimingBeforeAfter(
-    "CDet_run5710_projection.conf", 485,
-    "dnp_run5710_bar30", "/path/to/Rootfiles", 100000);
+    "CDet_run5710_projection.conf", 469,
+    "dnp_run5710_bar29", "/path/to/Rootfiles", 100000);
 ```
 
 The event override defaults to `-2` (use configuration); `-1` reads all selected
@@ -49,7 +50,7 @@ arguments at the end set the before/after DT fit windows:
 // dt bin width/min/max, ECal-time bin width/min/max,
 // before DT fit min/max, after DT fit min/max
 Plot_CDet_PixelTimingBeforeAfter(
-    "CDet_run5710_projection.conf", 485, "dnp_run5710_bar30", nullptr, -2,
+    "CDet_run5710_projection.conf", 469, "dnp_run5710_bar29", nullptr, -2,
     1.0, 0, 60, 1.0, 0, 40, true,
     1.0, -40, 10, 1.0, 5, 40,
     -30, 10, -30, 10);
@@ -79,12 +80,12 @@ The eight canvases remain open in interactive ROOT. Each saves as both PDF and
 PNG by default; `savePlots=false` displays them without saving. Default outputs:
 
 ```text
-cdet_timing_before_after/CDet_run5710_bar030_le_before.{pdf,png}
-cdet_timing_before_after/CDet_run5710_bar030_le_after.{pdf,png}
-cdet_timing_before_after/CDet_run5710_bar030_le_vs_tot_before.{pdf,png}
-cdet_timing_before_after/CDet_run5710_bar030_le_vs_tot_after.{pdf,png}
-cdet_timing_before_after/CDet_run5710_bar030_ecal_cdet_dt_before.{pdf,png}
-cdet_timing_before_after/CDet_run5710_bar030_ecal_cdet_dt_after.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_le_before.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_le_after.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_le_vs_tot_before.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_le_vs_tot_after.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_ecal_cdet_dt_before.{pdf,png}
+cdet_timing_before_after/CDet_run5710_bar029_ecal_cdet_dt_after.{pdf,png}
 cdet_timing_before_after/CDet_run5710_detector_cdet_t_vs_ecal_t_before.{pdf,png}
 cdet_timing_before_after/CDet_run5710_detector_cdet_t_vs_ecal_t_after.{pdf,png}
 ```
@@ -94,10 +95,11 @@ detector correlation files are shared across selected bars. Earlier
 `barNNN_cdet_t_vs_ecal_t_*` files in an existing destination are left untouched;
 use the new `detector_cdet_t_vs_ecal_t_*` files for the aggregate views.
 The PDF is the vector export for slides. Before/after pairs use the same
-binning and x ranges. **LE panels have independent count-axis maxima**, each
-15% above its own tallest bin, to reduce empty space when calibration sharpens
-the peak. Their axes remain counts, not normalized distributions. DT panels
-retain matched count scales, and the 2D plots retain matched color scales.
+binning and x ranges. **LE and DT panels have independent count-axis maxima**,
+each 5% above its own tallest bin (or its displayed DT fit, if taller).
+This keeps the broader before spectra from inheriting a much taller after
+peak's scale. Their axes remain counts, not normalized distributions, and
+their minima remain zero. The 2D plots retain matched color scales.
 The compact `N` and `SD` labels use the entire
 selected sample, including values outside the display range. No underflow or
 overflow boxes are drawn. LE retains those two labels. The DT panels also
@@ -105,7 +107,8 @@ show the fitted signal centroid `mu_i`, Gaussian width `sigma_fit`, their
 fit uncertainties in ns, and dimensionless chi-square/NDF. SD describes the
 whole distribution, including background; `sigma_fit` describes the fitted
 signal peak. Neither is automatically an intrinsic CDet timing resolution.
-The DT panels reserve space above the peaks for the labels.
+LE statistics and DT fit labels sit in compact headers above the plot frames;
+the count axes no longer reserve extra height for those labels.
 
 The dt convention follows the cross-target pixel-calibration plots:
 `dt = earm.ecal.adctime - CDet LE`, evaluated with the before/after CDet time.
@@ -312,3 +315,14 @@ to include the available LH2 sample. It does not establish the cross-target
 physics result. All eight PDFs and eight PNGs were exported; compact LE
 statistics now sit on one line above the peak, and the correlation margins
 allow space for the color-axis label.
+
+The following display revision replaced the LE 15% headroom and shared DT
+65% headroom with independent 5% headroom for both plot types, moved statistics
+above the frames, and changed the default selected pixel to 469 (bar 29).
+ACLiC compilation and 20,000-entry Run 6077 checks completed for bars 30 and 29,
+each retaining 4,685 accepted events and 41,627 detector hits. Both DT reference
+medians and their fit counts stayed unchanged. The bar-29 run selected 847
+hits across its full bar; its canvases display pixels 468–475. PDF/PNG exports
+were produced and the LE/DT layouts were visually checked, including accepted
+fits and low-statistics labels. Event selection, histogram contents and the
+fitting procedure were not changed by this display revision.
