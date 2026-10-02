@@ -1,8 +1,9 @@
-// Eight bar canvases for a cross-target timing-calibration comparison.
+// Six bar canvases and two full-detector timing-correlation canvases.
 // ROOT (from scripts/cdet, in a fresh session):
 //   .L Plot_CDet_PixelTimingBeforeAfter.C+
 //   Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 485);
-// Any logical pixel 0..2687 selects its containing 16-pixel bar (pixel/16).
+// Any logical pixel 0..2687 selects its containing bar (pixel/16).
+// Bar canvases show its middle eight pixels (bar*16+4 through bar*16+11).
 // Reuse the master's configuration/calibration readers, constants and bad-pixel
 // list, but NOT its main routine or calibration-writing routines.
 // Plotting only: fill matched before/after histograms in one event pass;
@@ -247,9 +248,13 @@ void Plot_CDet_PixelTimingBeforeAfter(
   // All pixels contribute to the run/sample's reference, regardless of which
   // bar is displayed. These are temporary histograms, not event vectors.
   std::array<std::vector<std::unique_ptr<TH1D>>, 2> hDT;
-  std::array<std::array<std::unique_ptr<TH2D>, 16>, 2> hLEToT, hCDetECal;
+  std::array<std::array<std::unique_ptr<TH2D>, 16>, 2> hLEToT;
+  std::array<std::unique_ptr<TH2D>, 2> hCDetECal;
   const char *stage[] = {"before", "after"};
   for (int state = 0; state < 2; ++state) {
+    hCDetECal[state].reset(new TH2D(TString::Format("hCDetECal_%s_%s_detector", tag.Data(), stage[state]), ";ECal ADC time (ns);CDet LE time (ns);Hits", nECal, ecalMin, ecalMax, nLE, leMin, leMax));
+    hCDetECal[state]->SetDirectory(nullptr); hCDetECal[state]->SetStats(false);
+    hCDetECal[state]->SetStatOverflows(TH1::kConsider);
     hDT[state].resize(NumCDetPaddles);
     for (int channel = 0; channel < NumCDetPaddles; ++channel) {
       hDT[state][channel].reset(new TH1D(TString::Format("hDT_%s_%s_p%d", tag.Data(), stage[state], channel), TString::Format("Pixel %d;t_{ECal} - t_{CDet,LE} (ns);Counts / %.3g ns", channel, (dtMax-dtMin)/nDT), nDT, dtMin, dtMax));
@@ -261,8 +266,7 @@ void Plot_CDet_PixelTimingBeforeAfter(
     for (int p = 0; p < 16; ++p) {
       hLE[state][p].reset(new TH1D(TString::Format("hLE_%s_%s_p%d", tag.Data(), stage[state], base+p), TString::Format("Pixel %d;LE (ns);Counts / %.3g ns", base+p, (leMax-leMin)/nLE), nLE, leMin, leMax));
       hLEToT[state][p].reset(new TH2D(TString::Format("hLEToT_%s_%s_p%d", tag.Data(), stage[state], base+p), TString::Format("Pixel %d;ToT (ns);LE (ns)", base+p), nToT, totMin, totMax, nLE, leMin, leMax));
-      hCDetECal[state][p].reset(new TH2D(TString::Format("hCDetECal_%s_%s_p%d", tag.Data(), stage[state], base+p), TString::Format("Pixel %d;ECal ADC time (ns);CDet LE time (ns)", base+p), nECal, ecalMin, ecalMax, nLE, leMin, leMax));
-      for (TH1 *hist : {static_cast<TH1*>(hLE[state][p].get()), static_cast<TH1*>(hLEToT[state][p].get()), static_cast<TH1*>(hCDetECal[state][p].get())}) {
+      for (TH1 *hist : {static_cast<TH1*>(hLE[state][p].get()), static_cast<TH1*>(hLEToT[state][p].get())}) {
         hist->SetDirectory(nullptr); hist->SetStats(false);
         hist->SetStatOverflows(TH1::kConsider);
       }
@@ -330,15 +334,19 @@ void Plot_CDet_PixelTimingBeforeAfter(
       const double rawTime = le[i]*TDC_calib_to_ns, width = tot[i]*TDC_calib_to_ns;
       const double walkP1 = layer == 0 ? gTimeWalkP1_L1 : gTimeWalkP1_L2;
       const double totRef = layer == 0 ? gTimeWalkTotRef_L1 : gTimeWalkTotRef_L2;
+      // The detector correlation's before view aligns pixels before examining
+      // the ECal dependence. Other before plots retain completely raw timing.
+      const double pixelTime = rawTime - reference + GetPixelToffsetCorr(channel);
       // Same order and signs as stage 7; no cuts are reapplied to the new time.
-      double time = rawTime - reference + GetPixelToffsetCorr(channel);
-      time = time - (gECalFitP0 + gECalFitP1*(*ecalT)) + gECalDeltaShift;
+      double time = pixelTime - (gECalFitP0 + gECalFitP1*(*ecalT)) + gECalDeltaShift;
       if (std::isfinite(width) && width > 0 && std::isfinite(totRef) && totRef > 0)
         time -= walkP1*(1/std::sqrt(width) - 1/std::sqrt(totRef));
       time += gGlobalTimingShift;
       hDT[0][channel]->Fill(*ecalT-rawTime);
       hDT[1][channel]->Fill(*ecalT-time);
-      // Full-detector DT spectra define mu_0; the other plots need one bar only.
+      hCDetECal[0]->Fill(*ecalT, pixelTime);
+      hCDetECal[1]->Fill(*ecalT, time);
+      // Full-detector spectra are filled before restricting the bar plots.
       const int p = channel - base;
       if (p < 0 || p >= 16) continue;
       ++selectedBarHits;
@@ -346,7 +354,6 @@ void Plot_CDet_PixelTimingBeforeAfter(
       for (int state = 0; state < 2; ++state) {
         hLE[state][p]->Fill(times[state]);
         hLEToT[state][p]->Fill(width, times[state]);
-        hCDetECal[state][p]->Fill(*ecalT, times[state]);
       }
     }
   }
@@ -356,7 +363,8 @@ void Plot_CDet_PixelTimingBeforeAfter(
   }
 
   std::cout << "[CDet before/after] " << processed << " events; " << goodEvents
-            << " good events; " << selectedBarHits << " hits in bar " << bar
+            << " good events; " << hCDetECal[0]->GetEntries() << " detector hits; "
+            << selectedBarHits << " hits in bar " << bar
             << " (identical before/after sample).\n";
   if (savePlots && gSystem->mkdir(outputDirectory, true) != 0 &&
       gSystem->AccessPathName(outputDirectory)) return;
@@ -372,58 +380,56 @@ void Plot_CDet_PixelTimingBeforeAfter(
     std::cout << "  mu_0 = " << mu0[state] << " ns (" << referenceDescription[state] << ")\n";
   }
 
-  // Matched axes/scales and small labels make before/after directly comparable.
+  // LE panels use independent count scales to avoid empty space when one
+  // sample has a much taller peak. Other before/after scales remain matched.
   auto histogram = [&](int kind, int state, int p) -> TH1* {
     if (kind == 0) return hLE[state][p].get();
     if (kind == 1) return hLEToT[state][p].get();
-    if (kind == 2) return hDT[state][base+p].get();
-    return hCDetECal[state][p].get();
+    return hDT[state][base+p].get();
   };
-  double displayMax[4][16];
-  for (int kind = 0; kind < 4; ++kind)
+  double displayMax[2][3][16];
+  for (int kind = 0; kind < 3; ++kind)
     for (int p = 0; p < 16; ++p) {
       double top = std::max(1.0,
           std::max(histogram(kind, 0, p)->GetMaximum(), histogram(kind, 1, p)->GetMaximum()));
       if (kind == 2)
         for (int state = 0; state < 2; ++state)
           if (dtFits[state][base+p]) top = std::max(top, dtFits[state][base+p]->GetMaximum());
-      displayMax[kind][p] = (kind % 2 ? 1.0 : kind == 2 ? 1.65 : 1.25) * top;
+      for (int state = 0; state < 2; ++state)
+        displayMax[state][kind][p] = kind == 0
+            ? 1.15*std::max(1.0, histogram(kind, state, p)->GetMaximum())
+            : (kind == 1 ? top : 1.65*top);
     }
-  const char *kind[] = {"le", "le_vs_tot", "ecal_cdet_dt", "cdet_t_vs_ecal_t"};
-  const char *description[] = {"LE", "LE vs ToT", "ECal - CDet #Deltat", "CDet t vs ECal t"};
+  const double correlationMax = std::max(1.0, std::max(hCDetECal[0]->GetMaximum(), hCDetECal[1]->GetMaximum()));
+  const char *kind[] = {"le", "le_vs_tot", "ecal_cdet_dt"};
+  const char *description[] = {"LE", "LE vs ToT", "ECal - CDet #Deltat"};
   for (int state = 0; state < 2; ++state) {
-    for (int plot = 0; plot < 4; ++plot) {
-      const bool twoD = plot == 1 || plot == 3;
+    for (int plot = 0; plot < 3; ++plot) {
+      const bool twoD = plot == 1;
       const TString name = TString::Format("CDet_%s_%s_%s", tag.Data(), kind[plot], stage[state]);
-      TCanvas *canvas = new TCanvas(name, name, 1600, 1200);
-      TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.024);
+      TCanvas *canvas = new TCanvas(name, name, 1600, 820);
+      TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.033);
       label.DrawLatex(0.035, 0.965, TString::Format("Run %d | Layer %d, bar %d | %s | %s timing calibration", run, pixel/1344+1, bar, description[plot], state ? "After full" : "Before"));
-      label.SetTextSize(0.015);
+      label.SetTextSize(0.021);
       label.DrawLatex(0.035, 0.937, TString::Format("Same hits: LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
+      if (plot == 0)
+        label.DrawLatex(0.035, 0.910, "Independent count-axis maxima; identical before/after hits, x ranges and binning");
       if (plot == 2) {
         const TString reference = std::isfinite(mu0[state])
             ? TString::Format("#mu_{0} = %.2f ns (%s)", mu0[state], referenceDescription[state].Data())
             : "#mu_{0} = n/a (no reliable detector reference)";
         label.DrawLatex(0.035, 0.910, TString::Format("%s | %s sample | Red: Gaussian + linear background; broad fit [%.3g, %.3g] ns", reference.Data(), stage[state], fitMin[state], fitMax[state]));
       }
-      TPad *grid = new TPad(name+"_grid", "", 0, 0, 1, plot == 2 ? 0.887 : 0.915);
-      grid->Draw(); grid->Divide(4, 4, 0.002, 0.002);
-      for (int p = 0; p < 16; ++p) {
-        grid->cd(p+1);
+      TPad *grid = new TPad(name+"_grid", "", 0, 0, 1, plot == 1 ? 0.915 : 0.887);
+      grid->Draw(); grid->Divide(4, 2, 0.002, 0.002);
+      // Original 4x4 rows two and three: retain their logical pixel labels.
+      for (int p = 4; p < 12; ++p) {
+        grid->cd(p-3);
         gPad->SetLeftMargin(0.15); gPad->SetBottomMargin(0.15);
         gPad->SetRightMargin(twoD ? 0.15 : 0.04); gPad->SetTopMargin(0.11);
         TH1 *hist = histogram(plot, state, p);
-        hist->SetMinimum(0); hist->SetMaximum(displayMax[plot][p]);
+        hist->SetMinimum(0); hist->SetMaximum(displayMax[state][plot][p]);
         hist->DrawCopy(twoD ? "COLZ" : "HIST");
-        if (plot == 3 && hist->GetEntries() > 0) {
-          // Same ProfileX marker convention as cCDetTvsECalT in the master.
-          // This is a visual mean trend, not a calibration fit or update.
-          std::unique_ptr<TProfile> profile(hCDetECal[state][p]->ProfileX(TString::Format("pCDetECal_%s_%s_p%d", tag.Data(), stage[state], base+p), 1, nLE));
-          profile->SetDirectory(nullptr); profile->SetStats(false);
-          profile->SetMarkerStyle(20); profile->SetMarkerSize(0.6);
-          profile->SetMarkerColor(kBlack); profile->SetLineColor(kBlack);
-          profile->DrawCopy("P E1 SAME");
-        }
         if (plot == 2 && !IsUnusedPixel(base+p)) {
           TF1 *fit = dtFits[state][base+p].get();
           if (fit) fit->DrawCopy("SAME");
@@ -443,10 +449,13 @@ void Plot_CDet_PixelTimingBeforeAfter(
           }
           label.SetTextAlign(11);
         } else if (!twoD) {
-          label.SetTextSize(0.044);
-          label.DrawLatex(0.60, 0.82, TString::Format("N = %.0f", hist->GetEntries()));
-          if (hist->GetEntries() > 1)
-            label.DrawLatex(0.60, 0.755, TString::Format("SD = %.2f ns", hist->GetStdDev()));
+          // One compact line fits above the tallest bin with 15% headroom.
+          label.SetTextSize(0.039); label.SetTextAlign(31);
+          const TString counts = hist->GetEntries() > 1
+              ? TString::Format("N = %.0f   SD = %.2f ns", hist->GetEntries(), hist->GetStdDev())
+              : TString::Format("N = %.0f   SD = n/a", hist->GetEntries());
+          label.DrawLatex(0.94, 0.84, counts);
+          label.SetTextAlign(11);
         }
         if (IsUnusedPixel(base+p)) {
           label.SetTextSize(0.065); label.DrawLatex(0.27, 0.53, "Unused pixel");
@@ -457,6 +466,41 @@ void Plot_CDet_PixelTimingBeforeAfter(
         const TString prefix = TString::Format("%s/CDet_run%d_bar%03d_%s_%s", outputDirectory, run, bar, kind[plot], stage[state]);
         canvas->SaveAs(prefix+".pdf"); canvas->SaveAs(prefix+".png");
       }
+    }
+
+    // One aggregate correlation per state, including every selected detector
+    // hit. The selected bar controls only the six 4x2 canvases above.
+    const TString name = TString::Format("CDet_%s_detector_cdet_t_vs_ecal_t_%s", tag.Data(), stage[state]);
+    TCanvas *canvas = new TCanvas(name, name, 1600, 1000);
+    TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.027);
+    label.DrawLatex(0.04, 0.963, TString::Format("Run %d | Full detector | CDet t vs ECal t | %s", run, state ? "After: full timing calibration" : "Before: pixel offsets applied"));
+    label.SetTextSize(0.017);
+    label.DrawLatex(0.04, 0.931, TString::Format("Same hits: LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
+    label.DrawLatex(0.04, 0.904, TString::Format("N = %.0f accepted hits | %s | Black points: mean CDet time in displayed LE bins", hCDetECal[state]->GetEntries(), layerChoice == 3 ? "Layers 1 and 2" : layerChoice == 1 ? "Layer 1" : "Layer 2"));
+    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, 0.88);
+    pad->Draw(); pad->cd();
+    pad->SetLeftMargin(0.12); pad->SetRightMargin(0.18);
+    pad->SetBottomMargin(0.14); pad->SetTopMargin(0.04);
+    TH2D *hist = hCDetECal[state].get();
+    for (TAxis *axis : {hist->GetXaxis(), hist->GetYaxis(), hist->GetZaxis()}) {
+      axis->SetLabelSize(0.036); axis->SetTitleSize(0.042);
+    }
+    hist->GetZaxis()->SetTitleOffset(1.0);
+    hist->SetMinimum(0); hist->SetMaximum(correlationMax);
+    hist->DrawCopy("COLZ");
+    if (hist->GetEntries() > 0) {
+      // Same ProfileX marker convention as cCDetTvsECalT in the master.
+      // This pooled trend is a visual summary, not a new calibration fit.
+      std::unique_ptr<TProfile> profile(hist->ProfileX(TString::Format("pCDetECal_%s_%s_detector", tag.Data(), stage[state]), 1, nLE));
+      profile->SetDirectory(nullptr); profile->SetStats(false);
+      profile->SetMarkerStyle(20); profile->SetMarkerSize(0.6);
+      profile->SetMarkerColor(kBlack); profile->SetLineColor(kBlack);
+      profile->DrawCopy("P E1 SAME");
+    }
+    canvas->Update();
+    if (savePlots) {
+      const TString prefix = TString::Format("%s/CDet_run%d_detector_cdet_t_vs_ecal_t_%s", outputDirectory, run, stage[state]);
+      canvas->SaveAs(prefix+".pdf"); canvas->SaveAs(prefix+".png");
     }
   }
 }
