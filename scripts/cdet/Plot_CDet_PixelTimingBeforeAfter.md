@@ -15,6 +15,11 @@ aligned bar base is 464. Layer 2 pixel IDs
 are also supported. Bar numbering is global, 0–167. The selected bar does not
 restrict the full-detector correlation or the detector-wide DT reference fits.
 
+Saved per-pixel LE–ToT polygons now select **both** timing states by default.
+The default file is the same reviewed 102-cut Run 5710 artifact used by
+`Run_CDet_Calibration_Run5710_Accepted.C`; see **Saved polygon selection** below
+for its coordinates, provenance limits, and how to choose another file.
+
 ## Run it
 
 From `gocdetscripts` / `SBS-replay/scripts/cdet`, start a fresh ROOT session:
@@ -43,7 +48,8 @@ timing states. The bar plots' before state is uncorrected; the detector
 correlation's before state has pixel offsets applied, as labeled on its canvas.
 
 The next arguments control display binning, not acceptance. Four optional
-arguments at the end set the before/after DT fit windows:
+arguments set the before/after DT fit windows; the final optional argument
+selects the polygon file:
 
 ```cpp
 // LE bin width/min/max, ToT bin width/min/max, savePlots,
@@ -157,9 +163,9 @@ not agree, and the before/after references need not agree either.
 
 The peak model, group seeding, acceptance checks and reference rule match the
 automatic production fitting method. The plot sample remains the requested
-master good-hit sample: no extra extractor-only 1–12 GeV energy cut or manual
-LE–ToT polygons are added. Consequently, these plots are not a reproduction
-of the commissioned Run 5710 fit constants, whose calibration passes used
+master good-hit sample with the common polygon mask described below; no extra
+extractor-only 1–12 GeV energy cut is added. Consequently, these plots are not
+a reproduction of the commissioned Run 5710 fit constants, whose calibration passes used
 reviewed polygons and stage-specific inputs. Only the loaded constants are
 applied; the fitted centroids never change a correction or create a `.dat` file.
 
@@ -199,11 +205,75 @@ The same selections are evaluated before calibration:
 
 The master currently applies a valid `[ECalSelection]` window in the run timing
 file over the configured window; this macro follows that actual behavior.
-No additional elastic selection, layer pairing, ellipse selection, or saved
-LE–ToT polygon is imposed. The bar and middle-eight-pixel display restrictions
+No additional elastic selection, layer pairing, or ellipse selection is
+imposed. Saved LE–ToT polygons filter hits after these base event/occupancy
+selections; the event occupancies are not recalculated after that hit mask.
+The bar and middle-eight-pixel display restrictions
 apply only to the LE, LE–ToT and DT canvases, after evaluating the full
 detector's event-occupancy cuts. The CDet/ECal correlations and the temporary
 DT histograms defining the detector-wide references use all accepted pixels.
+
+## Saved polygon selection
+
+The final `pixelCutFile` argument defaults to:
+
+```text
+CDet_run5710_halfbar_aligned_final_archive/CDet_pixel_quality_cuts_run5710_halfbar_aligned_final.root
+```
+
+This file contains 102 reviewed Run 5710 cuts, including cuts for displayed
+pixels 468 and 471. The macro reads and clones each
+`pixel_NNNN/cut_le_vs_tot` without modifying the file. A missing/unreadable file
+or a file containing no pixel cuts stops before plotting. When a cut contains
+`source_run` metadata, a different input run also stops: Run 5710 cuts are not
+silently transferred to LH2. Supply a matching file for another run.
+
+Each saved polygon is evaluated once as:
+
+```text
+cut.IsInside(ToT_ns, raw_LE_ns - reference_ns + pixel_offset_ns)
+```
+
+That LE coordinate follows the actual `editCDetPixelLeTotCut()` drawing code:
+its `vPaddleGoodLe` values include reference subtraction and pixel offsets,
+but are not updated by ECal, time-walk, or run-shift corrections. The archived
+file records `calibration_stage = 7`; that metadata describes the analysis
+invocation and does not make the editor's per-pixel vector fully corrected.
+The same editor behavior is present in the archive's source revision
+`3dedf214`.
+
+The existing hierarchical extractor instead tests its polygons against
+`vGoodLe`, which is fully corrected at stage 7. This is a pre-existing
+editor/extractor coordinate discrepancy. This plot macro follows the drawing
+coordinates; it does not change the extractor or refit any calibration.
+Accordingly, the selected population is not asserted to reproduce the
+historical polygon-gated extraction. The active master also differs from the
+archive-era offsets, so physical acceptance must be reviewed on Run 5710
+before interpreting the revised plots as a validated scientific result.
+
+For a pixel with a saved polygon, an outside hit is removed from **all**
+before/after LE, LE–ToT, DT, and detector-correlation histograms. Both displayed
+times are then filled from the same surviving hit. Pixels without a polygon
+keep the base selections. The polygons supplement the configured LE/ToT cuts;
+they do not replace those cuts. Detector-wide reference fits use the same
+filtered sample. Plot headers identify polygon selection, and the terminal
+reports the file, number of loaded polygons, tested hits, and rejected hits
+for the detector and selected bar.
+
+To use freshly reviewed cuts, append their filename after the fit windows:
+
+```cpp
+Plot_CDet_PixelTimingBeforeAfter(
+    "CDet_run5710_projection.conf", 469, "dnp_run5710_bar29", nullptr, -2,
+    1, 0, 60, 1, 0, 40, true,
+    1, -40, 10, 1, 5, 40, -30, 10, -30, 10,
+    "CDet_pixel_quality_cuts.root");
+```
+
+An explicit final `""` or `nullptr` disables polygons for an uncut comparison.
+Such plots and their terminal output are labeled **Pixel polygons disabled**.
+Changing the cut file changes the sample; use a separate output directory
+when retaining both versions.
 
 ## Timing correction and plotting-only scope
 
@@ -236,9 +306,9 @@ working directory, including any run-specific ECal `p0/p1` overrides. It require
 complete pixel, ECal (including fixed delta), time-walk and run-shift constants
 before labeling a view fully corrected. It never updates those files.
 
-The macro is solely a plot producer. It uses the same hit selection and timing
-formula as the master's `vGoodLe`, but fills the histograms immediately and
-retains no run-wide event vectors. Per-event candidate indices are local and
+The macro is solely a plot producer. It uses the master's base hit selection
+and timing formula, adds the common polygon mask, fills the histograms
+immediately, and retains no run-wide event vectors. Per-event candidate indices are local and
 discarded after each event. Only the canvases and optional PDF/PNG exports
 remain; no event tree, analysis-vector interface, or calibration output is
 created. Shared calibration readers still load the existing constants into
@@ -250,7 +320,10 @@ times but is not updated by the later ECal/time-walk/global corrections. Also,
 the master's stage 0 still adds the run's global shift. Neither is suitable as
 the respective fully corrected or completely uncorrected view requested here.
 
-## Validation (2026-10-01)
+## Validation history (before polygon selection)
+
+The checks in this section describe revisions without polygon filtering.
+They remain the timing-formula and base-selection parity record.
 
 The initial four-canvas version passed ROOT ACLiC compilation. On the first
 20,000 entries of the locally
@@ -326,3 +399,30 @@ hits across its full bar; its canvases display pixels 468–475. PDF/PNG exports
 were produced and the LE/DT layouts were visually checked, including accepted
 fits and low-statistics labels. Event selection, histogram contents and the
 fitting procedure were not changed by this display revision.
+
+## Polygon-selection validation (2026-10-02)
+
+ROOT ACLiC compilation passed. A synthetic tree with known raw, pixel-aligned,
+and final times checked that the polygon uses the drawing coordinate, including
+optional reference subtraction. All 50 displayed histograms matched expected
+contents bin-for-bin, including flow bins, with cuts enabled and disabled.
+The test also checked pixels without cuts, unchanged base event occupancies,
+and stopping on missing, empty, or wrong-run cut files.
+
+On the first 20,000 local Run 6077 entries, reference hit times were captured
+from the unchanged `c916d26c` macro. With polygons explicitly disabled, the
+revised macro retained its 4,685 base-admitted events, 41,627 detector hits,
+and 847 bar-29 hits. Two **test-only** Run 6077 rectangles then rejected 33
+detector hits, including 19 bar-29 hits, leaving 41,594 and 828 respectively.
+All 50 displayed histograms matched independently filtered reference times
+bin-for-bin in both cases, and before/after populations remained identical.
+All eight PDF/PNG pairs exported, and the LE, LE–ToT, DT-fit, and detector
+correlation layouts were visually checked. Existing Podd dictionary/autoload
+warnings occurred while opening real data; tree reading and comparisons
+completed successfully.
+
+The default Run 5710 archive loaded all 102 cuts, and its run metadata
+correctly prevented implicit use on Run 6077. Local Run 5710 input is absent:
+these checks validate software enforcement, not the physical acceptance of
+the archived polygons with the current Run 5710 master. No calibration or
+cut file was changed, and no new production physics plots were generated.

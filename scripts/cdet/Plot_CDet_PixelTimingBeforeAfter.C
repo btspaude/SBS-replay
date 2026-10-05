@@ -4,6 +4,8 @@
 //   Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 469);
 // Any logical pixel 0..2687 selects its containing bar (pixel/16).
 // Bar canvases show its middle eight pixels (bar*16+4 through bar*16+11).
+// Saved LE/ToT polygons select one common sample in their pixel-aligned
+// drawing coordinates, before either timing state is filled.
 // Reuse the master's configuration/calibration readers, constants and bad-pixel
 // list, but NOT its main routine or calibration-writing routines.
 // Plotting only: fill matched before/after histograms in one event pass;
@@ -17,7 +19,8 @@ namespace CDetPixelTimingBeforeAfter {
 // Plot-only form of the automatic path in
 // extractHierarchicalCDetPixelTimingOffsetsDiagnostic(): same group seeds,
 // constrained/broad fits, quality requirements and detector-reference median.
-// No manual polygons, offset updates, or calibration-file writes occur here.
+// The input spectra already include any requested polygon selection.
+// No offset updates or calibration-file writes occur here.
 double FitDTSpectra(const std::vector<std::unique_ptr<TH1D>>& spectra,
                    double fitMin, double fitMax,
                    std::vector<std::unique_ptr<TF1>>& fits,
@@ -138,7 +141,9 @@ void Plot_CDet_PixelTimingBeforeAfter(
     double dtBinWidth = 1, double dtMin = -40, double dtMax = 10,
     double ecalBinWidth = 1, double ecalMin = 5, double ecalMax = 40,
     double dtBeforeFitMin = -30, double dtBeforeFitMax = 10,
-    double dtAfterFitMin = -30, double dtAfterFitMax = 10)
+    double dtAfterFitMin = -30, double dtAfterFitMax = 10,
+    const char *pixelCutFile = "CDet_run5710_halfbar_aligned_final_archive/"
+                              "CDet_pixel_quality_cuts_run5710_halfbar_aligned_final.root")
 {
   ApplyCDetPlotStyle();
   const int nLE = leBinWidth > 0 ? int(std::ceil((leMax-leMin)/leBinWidth)) : 0;
@@ -184,6 +189,45 @@ void Plot_CDet_PixelTimingBeforeAfter(
   if (!gGlobalTimingLoaded) {
     std::cerr << "[CDet before/after] Need shift_ns in CDet_run" << run << ".dat.\n";
     return;
+  }
+
+  // Use the same reviewed file as the accepted Run-5710 workflow by default.
+  // Clone the cuts so they remain valid after the read-only file closes.
+  // An explicit empty/null path disables polygons for an uncut comparison.
+  std::vector<std::unique_ptr<TCutG>> pixelCuts(NumCDetPaddles);
+  int loadedPixelCuts = 0;
+  if (pixelCutFile && pixelCutFile[0]) {
+    TFile cutInput(pixelCutFile, "READ");
+    if (cutInput.IsZombie()) {
+      std::cerr << "[CDet before/after] Cannot read requested pixel-cut file: "
+                << pixelCutFile << ". No plots produced.\n";
+      return;
+    }
+    for (int channel = 0; channel < NumCDetPaddles; ++channel) {
+      pixelCuts[channel].reset(LoadCDetPixelLeTotCut(cutInput, channel));
+      if (!pixelCuts[channel]) continue;
+      const auto *sourceRun = dynamic_cast<TParameter<int>*>(
+          cutInput.Get(CDetPixelCutDirectory(channel)+"/source_run"));
+      if (sourceRun && sourceRun->GetVal() != run) {
+        std::cerr << "[CDet before/after] Pixel " << channel
+                  << " polygon was drawn for run " << sourceRun->GetVal()
+                  << ", not requested run " << run
+                  << ". Supply matching cuts or explicitly disable them; no plots produced.\n";
+        return;
+      }
+      ++loadedPixelCuts;
+    }
+    if (loadedPixelCuts == 0) {
+      std::cerr << "[CDet before/after] No pixel LE/ToT polygons found in "
+                << pixelCutFile << ". No plots produced.\n";
+      return;
+    }
+    std::cout << "[CDet before/after] Loaded " << loadedPixelCuts
+              << " pixel LE/ToT polygons from " << pixelCutFile
+              << "; applied to BOTH samples at (ToT, pixel-aligned LE),"
+                 " before ECal/time-walk/run-shift corrections.\n";
+  } else {
+    std::cout << "[CDet before/after] Pixel polygons explicitly disabled.\n";
   }
 
   // The defaults, endpoints and run-file timing-window override match the
@@ -276,6 +320,7 @@ void Plot_CDet_PixelTimingBeforeAfter(
   }
 
   Long64_t processed = 0, goodEvents = 0, selectedBarHits = 0;
+  Long64_t polygonTestedHits = 0, polygonRejectedHits = 0, polygonRejectedBarHits = 0;
   while (processed < limit && reader.Next()) {
     ++processed;
     if (processed % 1000 == 0)
@@ -289,8 +334,8 @@ void Plot_CDet_PixelTimingBeforeAfter(
       std::cerr << "[CDet before/after] Mismatched arrays at entry " << reader.GetCurrentEntry() << '\n';
       return;
     }
-    // No additional elastic, pair, ellipse, or saved polygon cut: neither the
-    // master's vGoodLe population nor plotPaddles applies those selections.
+    // Start with the master's event and hit selections. Saved polygons are
+    // an additional common hit mask below; no elastic/pair/ellipse cut is added.
     if (!(*ecalX > -1.5 && *ecalX < 1.5 && *ecalX != 0 &&
           *ecalY > -1.2 && *ecalY < 1.2 && *ecalY != 0 &&
           *ecalT > ecalTimeMin && *ecalT < ecalTimeMax &&
@@ -337,6 +382,18 @@ void Plot_CDet_PixelTimingBeforeAfter(
       // The detector correlation's before view aligns pixels before examining
       // the ECal dependence. Other before plots retain completely raw timing.
       const double pixelTime = rawTime - reference + GetPixelToffsetCorr(channel);
+      // The cut editor fills vPaddleGoodLe with this pixel-aligned time; that
+      // vector is not updated by the later ECal, time-walk or run corrections.
+      // Evaluate the polygon once in its drawing coordinates, not separately
+      // on the raw and final displayed times. Uncut pixels retain the base cuts.
+      if (pixelCuts[channel]) {
+        ++polygonTestedHits;
+        if (!pixelCuts[channel]->IsInside(width, pixelTime)) {
+          ++polygonRejectedHits;
+          if (channel >= base && channel < base+16) ++polygonRejectedBarHits;
+          continue;
+        }
+      }
       // Same order and signs as stage 7; no cuts are reapplied to the new time.
       double time = pixelTime - (gECalFitP0 + gECalFitP1*(*ecalT)) + gECalDeltaShift;
       if (std::isfinite(width) && width > 0 && std::isfinite(totRef) && totRef > 0)
@@ -366,6 +423,11 @@ void Plot_CDet_PixelTimingBeforeAfter(
             << " good events; " << hCDetECal[0]->GetEntries() << " detector hits; "
             << selectedBarHits << " hits in bar " << bar
             << " (identical before/after sample).\n";
+  if (loadedPixelCuts > 0)
+    std::cout << "[CDet before/after] Polygons tested " << polygonTestedHits
+              << " hits; rejected " << polygonRejectedHits << " detector hits ("
+              << polygonRejectedBarHits << " in bar " << bar
+              << "). Event occupancy cuts were evaluated before polygons.\n";
   if (savePlots && gSystem->mkdir(outputDirectory, true) != 0 &&
       gSystem->AccessPathName(outputDirectory)) return;
 
@@ -401,6 +463,9 @@ void Plot_CDet_PixelTimingBeforeAfter(
   const double correlationMax = std::max(1.0, std::max(hCDetECal[0]->GetMaximum(), hCDetECal[1]->GetMaximum()));
   const char *kind[] = {"le", "le_vs_tot", "ecal_cdet_dt"};
   const char *description[] = {"LE", "LE vs ToT", "ECal - CDet #Deltat"};
+  const TString polygonLabel = loadedPixelCuts > 0
+      ? TString::Format("%d saved polygons at pixel-aligned LE; same hits in both samples", loadedPixelCuts)
+      : "Pixel polygons disabled; same hits in both samples";
   for (int state = 0; state < 2; ++state) {
     for (int plot = 0; plot < 3; ++plot) {
       const bool twoD = plot == 1;
@@ -409,16 +474,17 @@ void Plot_CDet_PixelTimingBeforeAfter(
       TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.033);
       label.DrawLatex(0.035, 0.965, TString::Format("Run %d | Layer %d, bar %d | %s | %s timing calibration", run, pixel/1344+1, bar, description[plot], state ? "After full" : "Before"));
       label.SetTextSize(0.021);
-      label.DrawLatex(0.035, 0.937, TString::Format("Same hits: LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
+      label.DrawLatex(0.035, 0.937, TString::Format("LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
+      label.DrawLatex(0.035, 0.910, polygonLabel);
       if (plot == 0)
-        label.DrawLatex(0.035, 0.910, "Independent count-axis maxima; identical before/after hits, x ranges and binning");
+        label.DrawLatex(0.035, 0.883, "Independent count-axis maxima; identical before/after x ranges and binning");
       if (plot == 2) {
         const TString reference = std::isfinite(mu0[state])
             ? TString::Format("#mu_{0} = %.2f ns (%s)", mu0[state], referenceDescription[state].Data())
             : "#mu_{0} = n/a (no reliable detector reference)";
-        label.DrawLatex(0.035, 0.910, TString::Format("%s | Red: Gaussian + linear background; broad fit [%.3g, %.3g] ns | Independent count axes", reference.Data(), fitMin[state], fitMax[state]));
+        label.DrawLatex(0.035, 0.883, TString::Format("%s | Red: Gaussian + linear background; broad fit [%.3g, %.3g] ns | Independent count axes", reference.Data(), fitMin[state], fitMax[state]));
       }
-      TPad *grid = new TPad(name+"_grid", "", 0, 0, 1, plot == 1 ? 0.915 : 0.887);
+      TPad *grid = new TPad(name+"_grid", "", 0, 0, 1, plot == 1 ? 0.887 : 0.860);
       grid->Draw(); grid->Divide(4, 2, 0.002, 0.002);
       // Original 4x4 rows two and three: retain their logical pixel labels.
       for (int p = 4; p < 12; ++p) {
@@ -478,9 +544,10 @@ void Plot_CDet_PixelTimingBeforeAfter(
     TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.027);
     label.DrawLatex(0.04, 0.963, TString::Format("Run %d | Full detector | CDet t vs ECal t | %s", run, state ? "After: full timing calibration" : "Before: pixel offsets applied"));
     label.SetTextSize(0.017);
-    label.DrawLatex(0.04, 0.931, TString::Format("Same hits: LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
+    label.DrawLatex(0.04, 0.931, TString::Format("LE [%.3g, %.3g] ns; ToT [%.3g, %.3g] ns; ECal time (%.3g, %.3g) ns; |#Deltax| #leq %.3g m; |#Deltay| #leq 0.36 m", cutLEMin, cutLEMax, cutToTMin, cutToTMax, ecalTimeMin, ecalTimeMax, xDiffMax));
     label.DrawLatex(0.04, 0.904, TString::Format("N = %.0f accepted hits | %s | Black points: mean CDet time in displayed LE bins", hCDetECal[state]->GetEntries(), layerChoice == 3 ? "Layers 1 and 2" : layerChoice == 1 ? "Layer 1" : "Layer 2"));
-    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, 0.88);
+    label.DrawLatex(0.04, 0.877, polygonLabel);
+    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, 0.853);
     pad->Draw(); pad->cd();
     pad->SetLeftMargin(0.12); pad->SetRightMargin(0.18);
     pad->SetBottomMargin(0.14); pad->SetTopMargin(0.04);
