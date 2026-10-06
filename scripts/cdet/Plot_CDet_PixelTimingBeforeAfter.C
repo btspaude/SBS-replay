@@ -671,6 +671,10 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
   Long64_t malformedPairs = 0;
   while (processed < limit && reader.Next()) {
     ++processed;
+    if (processed % 1000 == 0)
+      std::cout << "[CDet pair/bar timing] Run " << run << ": entry "
+                << processed << "/" << limit << " (chain entries "
+                << total << ")" << std::endl;
     const size_t n = pixel.GetSize(), np = pairDT.GetSize();
     if (pulseDT.GetSize() != n || tot.GetSize() != n || calibValid.GetSize() != n ||
         ecalEligible.GetSize() != n || spatialPass.GetSize() != n ||

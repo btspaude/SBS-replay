@@ -37,6 +37,9 @@ Plot_CDet_PairDTvsDXAndBarTiming(
 `nullptr` uses `OUT_DIR`; replace it with the replay-file directory if needed.
 The `-1` event override processes all entries in the configured segment range,
 including rollover files. The default `-2` uses `analysis.events` instead.
+Progress prints and flushes every 1,000 entries, showing the run, current
+entry, requested entry limit, and total chain entries. This counts every
+entry read, including events rejected by the selections.
 Bar IDs are zero-based: **Bar 30 comprises logical pixels 480–495**, including
 all instrumented pixels in that block, not just the middle eight shown by the
 legacy before/after canvases.
