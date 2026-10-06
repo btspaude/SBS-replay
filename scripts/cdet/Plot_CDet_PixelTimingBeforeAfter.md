@@ -24,8 +24,10 @@ for its coordinates, provenance limits, and how to choose another file.
 
 ### Replay pairs and the Bar 30 pulse spectrum
 
-The same file also provides an independent entry point for two fully corrected
-replay plots. It does not run the eight legacy before/after canvases:
+The same file also provides an independent entry point for two replay-timing
+plots and two comparisons with the optional y-propagation correction. The
+comparisons are enabled by default with `n = 1.59`. This entry point does not
+run the eight legacy before/after canvases:
 
 ```cpp
 .L Plot_CDet_PixelTimingBeforeAfter.C+
@@ -72,28 +74,71 @@ canvas reports both pulse and event counts.
 
 Here “ECal projection” means the replay's `spatial_pass` flag, matching that
 existing pulse diagnostic. Its spatial/time/quality limits are already encoded
-in the replay flags. No additional configuration time window, macro timing
-correction, or saved pixel polygon is applied by this entry point. In
+in the replay flags. No additional configuration time window or saved pixel
+polygon is applied, and existing replay timing corrections are not reapplied. In
 particular, replay broad quality is not evidence of a saved polygon cut.
+
+The two additional canvases compare these exact same pairs/pulses before and
+after the y correction from `plotCDetLayersTimeComp()` in
+`PlotElastic_Calibration_Master_stageflag_singlefile_crosstarget.C`. Pairing
+and pulse selection are completed using the stored flags and membership;
+the correction changes only the plotted timing values:
+
+```text
+b_side = -n/c for the left side, +n/c for the right side
+delta_i = b_side * (pulse.ecal_y_proj[i] - pulse.y[i])
+dt_pulse,y = pulse.ecal_residual + delta_i
+dt_pair,y = pair.ecal_residual + (delta_L1 + delta_L2)/2
+```
+
+`c = 0.299792458 m/ns`, so the default magnitude is `5.30367 ns/m`.
+The positive sign in the residual correction follows from
+`t_CDet,y = t_CDet,corr - delta_i` and `dt = t_ECal - t_CDet`.
+Each pair member uses its own layer projection and readout-side sign,
+including pairs crossing the central seam. Channel IDs modulo 1344 below
+672 use the left-side sign; the remaining IDs use the right-side sign.
+For Bar 30, a projected y displacement of +0.10 m changes dt by −0.530 ns.
+
+`pulse.y` stores the fixed half-bar center; the current database gives the
+same center to every instrumented paddle within each half-bar. The correction
+uses `pulse.ecal_y_proj` directly, not `pulse.ecal_y_residual`, which also
+contains the spatial-selection offset. This reproduces the master's center
+and projection convention without loading its geometry or calibration tables.
+The two geometry branches must be present and finite for selected entries;
+otherwise the enabled correction stops with a diagnostic instead of producing
+a partially corrected comparison.
+
+The pair comparison shows the two 2D distributions side by side with matching
+color scales. The bar comparison overlays the spectra and separately fits
+both with the same Gaussian plus linear-background model and fit interval.
+This is a model-based timing diagnostic; it does not refit a propagation
+speed, rerun selection, modify the ROOT input, or install new calibration.
 
 Following the first five arguments, optional arguments are:
 
 ```cpp
 // dx bin width/min/max (m), dt bin width/min/max (ns),
-// Bar-spectrum fit min/max (ns), savePlots
+// Bar-spectrum fit min/max (ns), savePlots, y-correction refractive index
 Plot_CDet_PairDTvsDXAndBarTiming(
     "CDet_run6077_projection.conf", 30, "cdet_pair_timing", nullptr, -1,
-    0.002, -0.16, 0.16, 1.0, -60.0, 30.0, -55.0, -10.0, true);
+    0.002, -0.16, 0.16, 1.0, -60.0, 30.0, -55.0, -10.0, true, 1.59);
 ```
+
+Set the final argument to `0.0` to disable the y comparison and produce only
+the original two replay-timing canvases; the y geometry branches are then
+not required. This routine uses that argument, not the master's separate
+`display.y_correction_refractive_index` configuration key.
 
 Ranges control the displayed histograms, not selection. The bar spectrum uses
 the existing diagnostic's Gaussian plus linear-background fit and default
 fit/peak-seed windows. The fit is for display and never updates calibration.
-Both canvases remain open and save PDF/PNG by default:
+All canvases remain open and save PDF/PNG by default:
 
 ```text
 cdet_pair_timing/CDet_run6077_pair_ecal_cdet_dt_vs_dx.{pdf,png}
 cdet_pair_timing/CDet_run6077_bar030_ecal_cdet_dt_projected_quality.{pdf,png}
+cdet_pair_timing/CDet_run6077_pair_ecal_cdet_dt_vs_dx_y_comparison.{pdf,png}
+cdet_pair_timing/CDet_run6077_bar030_ecal_cdet_dt_y_comparison.{pdf,png}
 ```
 
 Validated on 2026-10-06 with ROOT ACLiC and all 354,656 entries in the local
@@ -106,6 +151,19 @@ exported and the PNG layouts were inspected. The existing Podd dictionary
 autoload warnings appeared while opening the files; compilation, reading,
 and histogram comparisons completed successfully. These results reproduce
 the calibration and flags already stored in that local replay dataset.
+
+The y-comparison revision passed ACLiC compilation and synthetic checks of
+left/right signs, zero displacement, opposite-side pair members, unpaired
+bar pulses, unchanged selections, and disabling the correction. On the same
+full Run 6077 dataset, all four histograms matched independent `TTree::Draw`
+formulas bin-for-bin, including flow bins. The two original histograms also
+matched the previously verified release. Each comparison retained all 113,689
+pairs or 9,470 bar pulses, respectively. With `n = 1.59`, the Bar-30 fitted
+peak width changed from `2.91 +/- 0.10 ns` to `2.82 +/- 0.10 ns`; the fitted
+centroid changed from `-27.78 +/- 0.08 ns` to `-27.54 +/- 0.08 ns`. These are
+fits to the same events under an assumed propagation model, not a measurement
+of the propagation speed or a claim of a statistically established improvement.
+All four PDF/PNG pairs exported, and the comparison PNG layouts were inspected.
 
 ### Legacy hit before/after canvases
 

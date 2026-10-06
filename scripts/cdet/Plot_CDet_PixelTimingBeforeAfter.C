@@ -583,13 +583,17 @@ void Plot_CDet_PixelTimingBeforeAfter(
 // hCDetBar30ECalMinusCDet_ProjectedQuality in the good-pulse diagnostics and
 // includes unpaired pulses. All plotted timing is already corrected, in ns.
 // This entry point does not load or reapply the macro's calibration/polygons.
+// The optional y propagation diagnostic follows plotCDetLayersTimeComp(),
+// adding comparisons on the same selected sample. Set the final argument to
+// zero to retain only the two replay-timing plots.
 void Plot_CDet_PairDTvsDXAndBarTiming(
     const char *configFile = "CDet_run6077_projection.conf", int bar = 30,
     const char *outputDirectory = "cdet_pair_timing",
     const char *inputDirectory = nullptr, Long64_t eventsOverride = -2,
     double dxBinWidth = 0.002, double dxMin = -0.16, double dxMax = 0.16,
     double dtBinWidth = 1.0, double dtMin = -60.0, double dtMax = 30.0,
-    double fitMin = -55.0, double fitMax = -10.0, bool savePlots = true)
+    double fitMin = -55.0, double fitMax = -10.0, bool savePlots = true,
+    double yCorrectionRefractiveIndex = 1.59)
 {
   ApplyCDetPlotStyle();
   const int nDX = std::isfinite(dxBinWidth) && dxBinWidth > 0 &&
@@ -601,10 +605,14 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
   if (bar < 0 || bar >= NumCDetPaddles/16 || nDX <= 0 || nDT <= 0 ||
       !std::isfinite(fitMin) || !std::isfinite(fitMax) || fitMin >= fitMax ||
       fitMin < dtMin || fitMax > dtMax || eventsOverride < -2 ||
+      !std::isfinite(yCorrectionRefractiveIndex) || yCorrectionRefractiveIndex < 0 ||
+      (yCorrectionRefractiveIndex > 0 && yCorrectionRefractiveIndex < 1) ||
       (savePlots && (!outputDirectory || !outputDirectory[0]))) {
-    std::cerr << "[CDet pair/bar timing] Invalid bar, event limit, histogram/fit range or output directory.\n";
+    std::cerr << "[CDet pair/bar timing] Invalid bar, event limit, histogram/fit range, refractive index or output directory.\n";
     return;
   }
+  const bool applyYCorrection = yCorrectionRefractiveIndex > 0;
+  const double ySlopeMagnitude = yCorrectionRefractiveIndex/0.299792458; // ns/m
   TEnv env;
   if (!LoadCDetConfiguration(env, configFile, "CDet pair/bar timing")) return;
   const int run = env.GetValue("analysis.run_number", 6077);
@@ -642,6 +650,12 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
       return;
     }
   }
+  if (applyYCorrection)
+    for (const char *name : {"earm.cdet.pulse.y", "earm.cdet.pulse.ecal_y_proj"})
+      if (!chain.GetBranch(name)) {
+        std::cerr << "[CDet pair/bar timing] Y correction requires branch: " << name << ". No plots produced.\n";
+        return;
+      }
   TTreeReader reader(&chain);
   TTreeReaderValue<double> ecalEnergy(reader, "earm.ecal.e");
   TTreeReaderArray<double> pixel(reader, "earm.cdet.pulse.pmtnum");
@@ -656,16 +670,40 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
   TTreeReaderArray<double> pairIndexL1(reader, "earm.cdet.pair.pulse_index_l1");
   TTreeReaderArray<double> pairIndexL2(reader, "earm.cdet.pair.pulse_index_l2");
   TTreeReaderArray<double> pairDT(reader, "earm.cdet.pair.ecal_residual");
+  std::unique_ptr<TTreeReaderArray<double>> yCenter, projectedY;
+  if (applyYCorrection) {
+    yCenter.reset(new TTreeReaderArray<double>(reader, "earm.cdet.pulse.y"));
+    projectedY.reset(new TTreeReaderArray<double>(reader, "earm.cdet.pulse.ecal_y_proj"));
+    std::cout << "[CDet pair/bar timing] Y comparison enabled: n = "
+              << yCorrectionRefractiveIndex << ", |dt/dy| = " << ySlopeMagnitude
+              << " ns/m; same pulses and stored pairs before/after.\n";
+  }
+  // pulse.y is the database half-bar center (constant across its paddles).
+  // Use the stored projection itself, not ecal_y_residual, which additionally
+  // subtracts the spatial-selection offset. This matches the master's model:
+  // t_y = t - b_side*(y_proj-y_center), hence (ECal-t)_y = (ECal-t) + b_side*dy.
+  auto yResidualShift = [&](size_t i) {
+    if (!applyYCorrection) return 0.0;
+    if (!std::isfinite((*yCenter)[i]) || !std::isfinite((*projectedY)[i]) ||
+        std::fabs((*yCenter)[i]) >= 900 || std::fabs((*projectedY)[i]) >= 900)
+      return std::numeric_limits<double>::quiet_NaN();
+    const int side = (int(pixel[i])%1344)/672;
+    const double signedSlope = side == 0 ? -ySlopeMagnitude : ySlopeMagnitude;
+    return signedSlope*((*projectedY)[i]-(*yCenter)[i]);
+  };
 
   static unsigned int invocation = 0;
   const TString tag = TString::Format("run%d_bar%03d_%u", run, bar, ++invocation);
   TH2D hPairDTvsDX("hCDetPairDTvsDX_"+tag, ";<x_{CDet,corr}>_{pair} - <x_{ECal projected}>_{pair} (m);t_{ECal} - <t_{CDet,corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
   TH1D hBarDT("hCDetBarProjectedQualityDT_"+tag, TString::Format(";t_{ECal} - t_{CDet,corr} (ns);Pulses / %.3g ns", (dtMax-dtMin)/nDT), nDT, dtMin, dtMax);
-  for (TH1 *hist : {static_cast<TH1*>(&hPairDTvsDX), static_cast<TH1*>(&hBarDT)}) {
+  TH2D hPairYDTvsDX("hCDetPairYCorrectedDTvsDX_"+tag, ";<x_{CDet,corr}>_{pair} - <x_{ECal projected}>_{pair} (m);t_{ECal} - <t_{CDet,y corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
+  TH1D hBarYDT("hCDetBarYCorrectedDT_"+tag, TString::Format(";t_{ECal} - t_{CDet} (ns);Pulses / %.3g ns", (dtMax-dtMin)/nDT), nDT, dtMin, dtMax);
+  for (TH1 *hist : {static_cast<TH1*>(&hPairDTvsDX), static_cast<TH1*>(&hBarDT), static_cast<TH1*>(&hPairYDTvsDX), static_cast<TH1*>(&hBarYDT)}) {
     hist->SetDirectory(nullptr); hist->SetStats(false);
     hist->SetStatOverflows(TH1::kConsider);
   }
   hBarDT.SetLineColor(kBlack); hBarDT.SetLineWidth(2);
+  hBarYDT.SetLineColor(kBlue+1); hBarYDT.SetLineWidth(2);
 
   Long64_t processed = 0, energyEvents = 0, pairEvents = 0, barEvents = 0;
   Long64_t malformedPairs = 0;
@@ -679,7 +717,8 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
     if (pulseDT.GetSize() != n || tot.GetSize() != n || calibValid.GetSize() != n ||
         ecalEligible.GetSize() != n || spatialPass.GetSize() != n ||
         broadQuality.GetSize() != n || x.GetSize() != n || projectedX.GetSize() != n ||
-        pairIndexL1.GetSize() != np || pairIndexL2.GetSize() != np) {
+        pairIndexL1.GetSize() != np || pairIndexL2.GetSize() != np ||
+        (applyYCorrection && (yCenter->GetSize() != n || projectedY->GetSize() != n))) {
       std::cerr << "[CDet pair/bar timing] Mismatched arrays at entry " << reader.GetCurrentEntry() << ". No plots produced.\n";
       return;
     }
@@ -699,7 +738,15 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
           !std::isfinite(dx) || !std::isfinite(pairDT[p])) {
         ++malformedPairs; continue;
       }
+      // Correct the two members separately; opposite-side pairs have different
+      // propagation signs. Do not rerun pairing or its timing/ellipse cuts.
+      const double pairShift = 0.5*(yResidualShift(i1)+yResidualShift(i2));
+      if (!std::isfinite(pairShift)) {
+        std::cerr << "[CDet pair/bar timing] Invalid y geometry in selected pair at entry " << reader.GetCurrentEntry() << ". No plots produced.\n";
+        return;
+      }
       hPairDTvsDX.Fill(dx, pairDT[p]);
+      if (applyYCorrection) hPairYDTvsDX.Fill(dx, pairDT[p]+pairShift);
       hasPair = true;
     }
     // Exact bar population from Plot_CDet_GoodPulseCandidates_AllTDC.C:
@@ -712,7 +759,13 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
           !std::isfinite(pixel[i]) || !std::isfinite(pulseDT[i]) || !std::isfinite(tot[i])) continue;
       const int channel = int(std::lround(pixel[i]));
       if (channel < bar*16 || channel >= (bar+1)*16) continue;
+      const double shift = yResidualShift(i);
+      if (!std::isfinite(shift)) {
+        std::cerr << "[CDet pair/bar timing] Invalid y geometry in selected bar pulse at entry " << reader.GetCurrentEntry() << ". No plots produced.\n";
+        return;
+      }
       hBarDT.Fill(pulseDT[i]);
+      if (applyYCorrection) hBarYDT.Fill(pulseDT[i]+shift);
       hasBarPulse = true;
     }
     if (hasPair) ++pairEvents;
@@ -732,24 +785,39 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
 
   // Same Gaussian + linear-background diagnostic and default fit/seed windows
   // as the historical Bar-30 panel. A failed fit is not reported as a result.
-  std::unique_ptr<TF1> fit;
-  if (hBarDT.GetEntries() >= 20) {
+  auto fitBarSpectrum = [&](TH1D& hist, const TString& name, int color) {
+    std::unique_ptr<TF1> fit;
+    if (hist.GetEntries() < 20) return fit;
     const double seedMin = std::max(fitMin, -40.0), seedMax = std::min(fitMax, -15.0);
-    const int low = std::max(1, hBarDT.FindFixBin(seedMin < seedMax ? seedMin : fitMin));
-    const int high = std::min(nDT, hBarDT.FindFixBin(seedMin < seedMax ? seedMax : fitMax));
+    const int low = std::max(1, hist.FindFixBin(seedMin < seedMax ? seedMin : fitMin));
+    const int high = std::min(nDT, hist.FindFixBin(seedMin < seedMax ? seedMax : fitMax));
     int peak = low;
     for (int bin = low+1; bin <= high; ++bin)
-      if (hBarDT.GetBinContent(bin) > hBarDT.GetBinContent(peak)) peak = bin;
-    const int fitLow = std::max(1, hBarDT.FindFixBin(fitMin));
-    const int fitHigh = std::min(nDT, hBarDT.FindFixBin(fitMax));
-    const double background = 0.5*(hBarDT.GetBinContent(fitLow)+hBarDT.GetBinContent(fitHigh));
-    fit.reset(new TF1("fCDetBarProjectedQualityDT_"+tag, "gaus(0)+pol1(3)", fitMin, fitMax));
-    fit->SetParameters(std::max(1.0, hBarDT.GetBinContent(peak)-background), hBarDT.GetBinCenter(peak), 3.0, background, 0.0);
-    const int status = hBarDT.Fit(fit.get(), "RQN0");
+      if (hist.GetBinContent(bin) > hist.GetBinContent(peak)) peak = bin;
+    const int fitLow = std::max(1, hist.FindFixBin(fitMin));
+    const int fitHigh = std::min(nDT, hist.FindFixBin(fitMax));
+    const double background = 0.5*(hist.GetBinContent(fitLow)+hist.GetBinContent(fitHigh));
+    fit.reset(new TF1(name, "gaus(0)+pol1(3)", fitMin, fitMax));
+    fit->SetParameters(std::max(1.0, hist.GetBinContent(peak)-background), hist.GetBinCenter(peak), 3.0, background, 0.0);
+    const int status = hist.Fit(fit.get(), "RQN0");
     if (status != 0 || !std::isfinite(fit->GetParameter(1)) ||
         !std::isfinite(fit->GetParameter(2)) || fit->GetParameter(0) <= 0 ||
         std::fabs(fit->GetParameter(2)) <= 0 || fit->GetNDF() <= 0) fit.reset();
-    else { fit->SetLineColor(kRed+1); fit->SetLineWidth(2); fit->SetNpx(500); }
+    else { fit->SetLineColor(color); fit->SetLineWidth(2); fit->SetNpx(500); }
+    return fit;
+  };
+  auto fit = fitBarSpectrum(hBarDT, "fCDetBarProjectedQualityDT_"+tag, kRed+1);
+  std::unique_ptr<TF1> yFit;
+  if (applyYCorrection) {
+    yFit = fitBarSpectrum(hBarYDT, "fCDetBarYCorrectedDT_"+tag, kMagenta+1);
+    std::cout << "[CDet pair/bar timing] Bar " << bar << " y comparison: "
+              << hBarDT.GetEntries() << " -> " << hBarYDT.GetEntries()
+              << " pulses; mean " << hBarDT.GetMean() << " -> " << hBarYDT.GetMean()
+              << " ns; SD (including tails) " << hBarDT.GetStdDev() << " -> "
+              << hBarYDT.GetStdDev() << " ns.\n";
+    if (fit && yFit)
+      std::cout << "[CDet pair/bar timing] Bar peak sigma " << std::fabs(fit->GetParameter(2))
+                << " -> " << std::fabs(yFit->GetParameter(2)) << " ns.\n";
   }
 
   for (int plot = 0; plot < 2; ++plot) {
@@ -791,5 +859,65 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
       const TString prefix = TString::Format("%s/CDet_run%d_%s", outputDirectory, run, suffix.Data());
       canvas->SaveAs(prefix+".pdf"); canvas->SaveAs(prefix+".png");
     }
+  }
+
+  if (!applyYCorrection) return;
+  const double colorMax = std::max({1.0, hPairDTvsDX.GetMaximum(), hPairYDTvsDX.GetMaximum()});
+  const TString pairName = "CDet_"+tag+"_pair_y_comparison";
+  TCanvas *pairCanvas = new TCanvas(pairName, pairName, 1900, 950);
+  TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.029);
+  label.DrawLatex(0.035, 0.961, TString::Format("Run %d | Stored-pair ECal-CDet #Deltat vs #Deltax | y propagation comparison", run));
+  label.SetTextSize(0.021);
+  label.DrawLatex(0.035, 0.921, TString::Format("Same %.0f pairs | ECal energy [%.3g, %.3g] GeV | n = %.3g; |dt/dy| = %.3f ns/m | Matched color scales", hPairDTvsDX.GetEntries(), energyMin, energyMax, yCorrectionRefractiveIndex, ySlopeMagnitude));
+  TPad *pairGrid = new TPad(pairName+"_grid", "", 0, 0, 1, 0.89);
+  pairGrid->Draw(); pairGrid->Divide(2, 1, 0.005, 0.005);
+  for (int state = 0; state < 2; ++state) {
+    pairGrid->cd(state+1);
+    gPad->SetLeftMargin(0.16); gPad->SetRightMargin(0.18);
+    gPad->SetBottomMargin(0.16); gPad->SetTopMargin(0.09);
+    TH2D& hist = state ? hPairYDTvsDX : hPairDTvsDX;
+    hist.GetXaxis()->SetTitleSize(0.031); hist.GetYaxis()->SetTitleSize(0.036);
+    hist.GetZaxis()->SetTitleSize(0.038); hist.GetZaxis()->SetTitleOffset(1.4);
+    for (TAxis *axis : {hist.GetXaxis(), hist.GetYaxis(), hist.GetZaxis()}) axis->SetLabelSize(0.037);
+    hist.SetMinimum(0); hist.SetMaximum(colorMax); hist.DrawCopy("COLZ");
+    label.SetTextSize(0.033);
+    label.DrawLatex(0.16, 0.946, state ? "After y propagation correction" : "Replay timing before y correction");
+  }
+  pairCanvas->Update();
+
+  const TString barName = "CDet_"+tag+"_bar_y_comparison";
+  TCanvas *barCanvas = new TCanvas(barName, barName, 1400, 950);
+  label.SetTextSize(0.030);
+  label.DrawLatex(0.04, 0.964, TString::Format("Run %d | Bar %d | ECal projection + pulse quality | y propagation comparison", run, bar));
+  label.SetTextSize(0.021);
+  label.DrawLatex(0.04, 0.927, TString::Format("Same %.0f pulses in %lld events | ECal energy [%.3g, %.3g] GeV | n = %.3g; |dt/dy| = %.3f ns/m", hBarDT.GetEntries(), barEvents, energyMin, energyMax, yCorrectionRefractiveIndex, ySlopeMagnitude));
+  for (int state = 0; state < 2; ++state) {
+    TF1 *currentFit = state ? yFit.get() : fit.get();
+    label.DrawLatex(0.04, 0.893-0.033*state, currentFit
+        ? TString::Format("%s: #mu = %.2f #pm %.2f ns; #sigma = %.2f #pm %.2f ns | Gaussian + linear background [%.3g, %.3g] ns", state ? "After y" : "Before y", currentFit->GetParameter(1), currentFit->GetParError(1), std::fabs(currentFit->GetParameter(2)), currentFit->GetParError(2), fitMin, fitMax)
+        : TString::Format("%s: fit unavailable", state ? "After y" : "Before y"));
+  }
+  TPad *barPad = new TPad(barName+"_plot", "", 0, 0, 1, 0.830);
+  barPad->Draw(); barPad->cd();
+  barPad->SetLeftMargin(0.13); barPad->SetRightMargin(0.04);
+  barPad->SetBottomMargin(0.15); barPad->SetTopMargin(0.04);
+  hBarDT.GetXaxis()->SetTitle("t_{ECal} - t_{CDet} (ns)");
+  hBarDT.SetMaximum(1.05*std::max({1.0, hBarDT.GetBinContent(hBarDT.GetMaximumBin()), hBarYDT.GetMaximum(), fit ? fit->GetMaximum() : 0.0, yFit ? yFit->GetMaximum() : 0.0}));
+  TH1 *beforeDraw = hBarDT.DrawCopy("HIST"), *afterDraw = hBarYDT.DrawCopy("HIST SAME");
+  TF1 *beforeFitDraw = fit ? fit->DrawCopy("SAME") : nullptr;
+  TF1 *afterFitDraw = yFit ? yFit->DrawCopy("SAME") : nullptr;
+  TLegend legend(0.61, 0.73, 0.92, 0.92);
+  legend.SetBorderSize(0); legend.SetFillStyle(0); legend.SetTextSize(0.027);
+  legend.AddEntry(beforeDraw, "Before y correction", "l");
+  legend.AddEntry(afterDraw, "After y correction", "l");
+  if (beforeFitDraw) legend.AddEntry(beforeFitDraw, "Before-y peak fit", "l");
+  if (afterFitDraw) legend.AddEntry(afterFitDraw, "After-y peak fit", "l");
+  legend.DrawClone();
+  barCanvas->Update();
+  if (savePlots) {
+    const TString pairPrefix = TString::Format("%s/CDet_run%d_pair_ecal_cdet_dt_vs_dx_y_comparison", outputDirectory, run);
+    pairCanvas->SaveAs(pairPrefix+".pdf"); pairCanvas->SaveAs(pairPrefix+".png");
+    const TString barPrefix = TString::Format("%s/CDet_run%d_bar%03d_ecal_cdet_dt_y_comparison", outputDirectory, run, bar);
+    barCanvas->SaveAs(barPrefix+".pdf"); barCanvas->SaveAs(barPrefix+".png");
   }
 }
