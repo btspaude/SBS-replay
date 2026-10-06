@@ -22,6 +22,90 @@ for its coordinates, provenance limits, and how to choose another file.
 
 ## Run it
 
+### Replay pairs and the Bar 30 pulse spectrum
+
+The same file also provides an independent entry point for two fully corrected
+replay plots. It does not run the eight legacy before/after canvases:
+
+```cpp
+.L Plot_CDet_PixelTimingBeforeAfter.C+
+Plot_CDet_PairDTvsDXAndBarTiming(
+    "CDet_run6077_projection.conf", 30,
+    "cdet_pair_timing", nullptr, -1);
+```
+
+`nullptr` uses `OUT_DIR`; replace it with the replay-file directory if needed.
+The `-1` event override processes all entries in the configured segment range,
+including rollover files. The default `-2` uses `analysis.events` instead.
+Bar IDs are zero-based: **Bar 30 comprises logical pixels 480–495**, including
+all instrumented pixels in that block, not just the middle eight shown by the
+legacy before/after canvases.
+
+The first canvas uses **one entry per stored `earm.cdet.pair.*` pair**, across
+the full detector. It reproduces the original `hDtvsDxCDetECal` coordinates:
+
+```text
+dt = pair.ecal_residual = t_ECal - (t_L1,corr + t_L2,corr)/2
+dx = [(x_L1,corr - x_ECal,projected,L1)
+    + (x_L2,corr - x_ECal,projected,L2)]/2
+```
+
+Member positions come from `pulse.x_corr` and `pulse.ecal_x_proj`, indexed by
+`pair.pulse_index_l1/l2`. This dx is the **pair-mean position residual**, not
+`pair.dx` (the inter-layer displacement) or `pair.trajectory_residual` (the
+inter-layer displacement minus the ECal prediction). The routine uses the
+stored assignment as-is; any upstream pair cuts remain part of that sample.
+It applies the configured inclusive ECal energy interval and no new pair cut.
+
+The second canvas exactly reproduces the population of
+`hCDetBar30ECalMinusCDet_ProjectedQuality` in
+`Plot_CDet_GoodPulseCandidates_AllTDC.C`: the inclusive
+`analysis.ecal_energy_min/max` interval, finite pulse ID/residual/ToT, and all
+four stored flags `calib_valid`, `ecal_eligible`, `spatial_pass`, and
+`broad_quality_pass`. Each qualifying pulse in the selected bar contributes
+its `pulse.ecal_residual = t_ECal - t_CDet,corr`. **No stored pair or second-layer
+hit is required.** Multiple pulses in one event contribute separately; the
+canvas reports both pulse and event counts.
+
+Here “ECal projection” means the replay's `spatial_pass` flag, matching that
+existing pulse diagnostic. Its spatial/time/quality limits are already encoded
+in the replay flags. No additional configuration time window, macro timing
+correction, or saved pixel polygon is applied by this entry point. In
+particular, replay broad quality is not evidence of a saved polygon cut.
+
+Following the first five arguments, optional arguments are:
+
+```cpp
+// dx bin width/min/max (m), dt bin width/min/max (ns),
+// Bar-spectrum fit min/max (ns), savePlots
+Plot_CDet_PairDTvsDXAndBarTiming(
+    "CDet_run6077_projection.conf", 30, "cdet_pair_timing", nullptr, -1,
+    0.002, -0.16, 0.16, 1.0, -60.0, 30.0, -55.0, -10.0, true);
+```
+
+Ranges control the displayed histograms, not selection. The bar spectrum uses
+the existing diagnostic's Gaussian plus linear-background fit and default
+fit/peak-seed windows. The fit is for display and never updates calibration.
+Both canvases remain open and save PDF/PNG by default:
+
+```text
+cdet_pair_timing/CDet_run6077_pair_ecal_cdet_dt_vs_dx.{pdf,png}
+cdet_pair_timing/CDet_run6077_bar030_ecal_cdet_dt_projected_quality.{pdf,png}
+```
+
+Validated on 2026-10-06 with ROOT ACLiC and all 354,656 entries in the local
+Run 6077 replay set. The configured ECal energy interval admitted 201,698
+events; the plots contain 113,689 stored pairs in 58,477 events and 9,470
+Bar-30 pulses in 6,656 events. Of those bar pulses, 2,965 come from events
+with no stored pair. Both histograms matched independent `TTree::Draw`
+selections bin-for-bin, including underflow/overflow. Both PDF/PNG pairs
+exported and the PNG layouts were inspected. The existing Podd dictionary
+autoload warnings appeared while opening the files; compilation, reading,
+and histogram comparisons completed successfully. These results reproduce
+the calibration and flags already stored in that local replay dataset.
+
+### Legacy hit before/after canvases
+
 From `gocdetscripts` / `SBS-replay/scripts/cdet`, start a fresh ROOT session:
 
 ```cpp

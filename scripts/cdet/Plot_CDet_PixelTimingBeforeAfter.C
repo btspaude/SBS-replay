@@ -2,6 +2,8 @@
 // ROOT (from scripts/cdet, in a fresh session):
 //   .L Plot_CDet_PixelTimingBeforeAfter.C+
 //   Plot_CDet_PixelTimingBeforeAfter("CDet_run5710_projection.conf", 469);
+// Replay-pair DT versus DX and the all-pulse Bar-30 timing reproduction:
+//   Plot_CDet_PairDTvsDXAndBarTiming("CDet_run6077_projection.conf");
 // Any logical pixel 0..2687 selects its containing bar (pixel/16).
 // Bar canvases show its middle eight pixels (bar*16+4 through bar*16+11).
 // Saved LE/ToT polygons select one common sample in their pixel-aligned
@@ -570,6 +572,219 @@ void Plot_CDet_PixelTimingBeforeAfter(
     canvas->Update();
     if (savePlots) {
       const TString prefix = TString::Format("%s/CDet_run%d_detector_cdet_t_vs_ecal_t_%s", outputDirectory, run, stage[state]);
+      canvas->SaveAs(prefix+".pdf"); canvas->SaveAs(prefix+".png");
+    }
+  }
+}
+
+// Two independent samples from the same replay event pass. The 2D plot uses
+// stored pair.* membership and the historical ECal-minus-pair-mean definition;
+// its DX is NOT pair.dx or pair.trajectory_residual. The bar spectrum reproduces
+// hCDetBar30ECalMinusCDet_ProjectedQuality in the good-pulse diagnostics and
+// includes unpaired pulses. All plotted timing is already corrected, in ns.
+// This entry point does not load or reapply the macro's calibration/polygons.
+void Plot_CDet_PairDTvsDXAndBarTiming(
+    const char *configFile = "CDet_run6077_projection.conf", int bar = 30,
+    const char *outputDirectory = "cdet_pair_timing",
+    const char *inputDirectory = nullptr, Long64_t eventsOverride = -2,
+    double dxBinWidth = 0.002, double dxMin = -0.16, double dxMax = 0.16,
+    double dtBinWidth = 1.0, double dtMin = -60.0, double dtMax = 30.0,
+    double fitMin = -55.0, double fitMax = -10.0, bool savePlots = true)
+{
+  ApplyCDetPlotStyle();
+  const int nDX = std::isfinite(dxBinWidth) && dxBinWidth > 0 &&
+      std::isfinite(dxMin) && std::isfinite(dxMax) && dxMax > dxMin
+      ? int(std::ceil((dxMax-dxMin)/dxBinWidth)) : 0;
+  const int nDT = std::isfinite(dtBinWidth) && dtBinWidth > 0 &&
+      std::isfinite(dtMin) && std::isfinite(dtMax) && dtMax > dtMin
+      ? int(std::ceil((dtMax-dtMin)/dtBinWidth)) : 0;
+  if (bar < 0 || bar >= NumCDetPaddles/16 || nDX <= 0 || nDT <= 0 ||
+      !std::isfinite(fitMin) || !std::isfinite(fitMax) || fitMin >= fitMax ||
+      fitMin < dtMin || fitMax > dtMax || eventsOverride < -2 ||
+      (savePlots && (!outputDirectory || !outputDirectory[0]))) {
+    std::cerr << "[CDet pair/bar timing] Invalid bar, event limit, histogram/fit range or output directory.\n";
+    return;
+  }
+  TEnv env;
+  if (!LoadCDetConfiguration(env, configFile, "CDet pair/bar timing")) return;
+  const int run = env.GetValue("analysis.run_number", 6077);
+  const Long64_t events = eventsOverride == -2
+      ? env.GetValue("analysis.events", -1) : eventsOverride;
+  const double energyMin = env.GetValue("analysis.ecal_energy_min", 3.0);
+  const double energyMax = env.GetValue("analysis.ecal_energy_max", 4.5);
+  if (run <= 0 || !std::isfinite(energyMin) || !std::isfinite(energyMax) ||
+      energyMin >= energyMax) {
+    std::cerr << "[CDet pair/bar timing] Invalid run or ECal energy interval.\n";
+    return;
+  }
+  const char *directory = inputDirectory && inputDirectory[0]
+      ? inputDirectory : gSystem->Getenv("OUT_DIR");
+  if (!directory || !directory[0]) {
+    std::cerr << "[CDet pair/bar timing] Set OUT_DIR or pass inputDirectory.\n";
+    return;
+  }
+  TChain chain("T");
+  AddRunFilesToChain(&chain, directory, run,
+      env.GetValue("analysis.min_segment", -1), env.GetValue("analysis.max_segment", -1));
+  const Long64_t total = chain.GetEntries();
+  if (total <= 0) return;
+  const Long64_t limit = events > 0 ? std::min(events, total) : total;
+  chain.LoadTree(0);
+  for (const char *name : {"earm.ecal.e", "earm.cdet.pulse.pmtnum",
+       "earm.cdet.pulse.ecal_residual", "earm.cdet.pulse.tdc_tot_ns",
+       "earm.cdet.pulse.calib_valid", "earm.cdet.pulse.ecal_eligible",
+       "earm.cdet.pulse.spatial_pass", "earm.cdet.pulse.broad_quality_pass",
+       "earm.cdet.pulse.x_corr", "earm.cdet.pulse.ecal_x_proj",
+       "earm.cdet.pair.pulse_index_l1", "earm.cdet.pair.pulse_index_l2",
+       "earm.cdet.pair.ecal_residual"}) {
+    if (!chain.GetBranch(name)) {
+      std::cerr << "[CDet pair/bar timing] Missing required branch: " << name << ". No plots produced.\n";
+      return;
+    }
+  }
+  TTreeReader reader(&chain);
+  TTreeReaderValue<double> ecalEnergy(reader, "earm.ecal.e");
+  TTreeReaderArray<double> pixel(reader, "earm.cdet.pulse.pmtnum");
+  TTreeReaderArray<double> pulseDT(reader, "earm.cdet.pulse.ecal_residual");
+  TTreeReaderArray<double> tot(reader, "earm.cdet.pulse.tdc_tot_ns");
+  TTreeReaderArray<double> calibValid(reader, "earm.cdet.pulse.calib_valid");
+  TTreeReaderArray<double> ecalEligible(reader, "earm.cdet.pulse.ecal_eligible");
+  TTreeReaderArray<double> spatialPass(reader, "earm.cdet.pulse.spatial_pass");
+  TTreeReaderArray<double> broadQuality(reader, "earm.cdet.pulse.broad_quality_pass");
+  TTreeReaderArray<double> x(reader, "earm.cdet.pulse.x_corr");
+  TTreeReaderArray<double> projectedX(reader, "earm.cdet.pulse.ecal_x_proj");
+  TTreeReaderArray<double> pairIndexL1(reader, "earm.cdet.pair.pulse_index_l1");
+  TTreeReaderArray<double> pairIndexL2(reader, "earm.cdet.pair.pulse_index_l2");
+  TTreeReaderArray<double> pairDT(reader, "earm.cdet.pair.ecal_residual");
+
+  static unsigned int invocation = 0;
+  const TString tag = TString::Format("run%d_bar%03d_%u", run, bar, ++invocation);
+  TH2D hPairDTvsDX("hCDetPairDTvsDX_"+tag, ";<x_{CDet,corr}>_{pair} - <x_{ECal projected}>_{pair} (m);t_{ECal} - <t_{CDet,corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
+  TH1D hBarDT("hCDetBarProjectedQualityDT_"+tag, TString::Format(";t_{ECal} - t_{CDet,corr} (ns);Pulses / %.3g ns", (dtMax-dtMin)/nDT), nDT, dtMin, dtMax);
+  for (TH1 *hist : {static_cast<TH1*>(&hPairDTvsDX), static_cast<TH1*>(&hBarDT)}) {
+    hist->SetDirectory(nullptr); hist->SetStats(false);
+    hist->SetStatOverflows(TH1::kConsider);
+  }
+  hBarDT.SetLineColor(kBlack); hBarDT.SetLineWidth(2);
+
+  Long64_t processed = 0, energyEvents = 0, pairEvents = 0, barEvents = 0;
+  Long64_t malformedPairs = 0;
+  while (processed < limit && reader.Next()) {
+    ++processed;
+    const size_t n = pixel.GetSize(), np = pairDT.GetSize();
+    if (pulseDT.GetSize() != n || tot.GetSize() != n || calibValid.GetSize() != n ||
+        ecalEligible.GetSize() != n || spatialPass.GetSize() != n ||
+        broadQuality.GetSize() != n || x.GetSize() != n || projectedX.GetSize() != n ||
+        pairIndexL1.GetSize() != np || pairIndexL2.GetSize() != np) {
+      std::cerr << "[CDet pair/bar timing] Mismatched arrays at entry " << reader.GetCurrentEntry() << ". No plots produced.\n";
+      return;
+    }
+    if (!std::isfinite(*ecalEnergy) || *ecalEnergy < energyMin || *ecalEnergy > energyMax) continue;
+    ++energyEvents;
+    bool hasPair = false, hasBarPulse = false;
+    for (size_t p = 0; p < np; ++p) {
+      const double index1 = pairIndexL1[p], index2 = pairIndexL2[p];
+      if (!std::isfinite(index1) || !std::isfinite(index2) ||
+          index1 < 0 || index2 < 0 || index1 >= n || index2 >= n ||
+          index1 != std::floor(index1) || index2 != std::floor(index2)) {
+        ++malformedPairs; continue;
+      }
+      const size_t i1 = size_t(index1), i2 = size_t(index2);
+      const double dx = 0.5*((x[i1]-projectedX[i1]) + (x[i2]-projectedX[i2]));
+      if (!(pixel[i1] >= 0 && pixel[i1] < 1344 && pixel[i2] >= 1344 && pixel[i2] < NumCDetPaddles) ||
+          !std::isfinite(dx) || !std::isfinite(pairDT[p])) {
+        ++malformedPairs; continue;
+      }
+      hPairDTvsDX.Fill(dx, pairDT[p]);
+      hasPair = true;
+    }
+    // Exact bar population from Plot_CDet_GoodPulseCandidates_AllTDC.C:
+    // energy interval is inclusive; ECal position/time eligibility, projection
+    // and broad pulse quality come from replay flags. No pair or ellipse cut,
+    // additional time window, two-layer occupancy, or local pixel polygon.
+    for (size_t i = 0; i < n; ++i) {
+      if (!(calibValid[i] > 0.5 && ecalEligible[i] > 0.5 &&
+            spatialPass[i] > 0.5 && broadQuality[i] > 0.5) ||
+          !std::isfinite(pixel[i]) || !std::isfinite(pulseDT[i]) || !std::isfinite(tot[i])) continue;
+      const int channel = int(std::lround(pixel[i]));
+      if (channel < bar*16 || channel >= (bar+1)*16) continue;
+      hBarDT.Fill(pulseDT[i]);
+      hasBarPulse = true;
+    }
+    if (hasPair) ++pairEvents;
+    if (hasBarPulse) ++barEvents;
+  }
+  if (processed != limit) {
+    std::cerr << "[CDet pair/bar timing] Tree reading stopped early; check branches/input files. No plots produced.\n";
+    return;
+  }
+  std::cout << "[CDet pair/bar timing] " << processed << " entries; " << energyEvents
+            << " ECal-energy-selected events; " << hPairDTvsDX.GetEntries()
+            << " stored pairs in " << pairEvents << " events; " << hBarDT.GetEntries()
+            << " projection + quality pulses in bar " << bar << " from " << barEvents
+            << " events; " << malformedPairs << " malformed pairs skipped.\n";
+  if (savePlots && gSystem->mkdir(outputDirectory, true) != 0 &&
+      gSystem->AccessPathName(outputDirectory)) return;
+
+  // Same Gaussian + linear-background diagnostic and default fit/seed windows
+  // as the historical Bar-30 panel. A failed fit is not reported as a result.
+  std::unique_ptr<TF1> fit;
+  if (hBarDT.GetEntries() >= 20) {
+    const double seedMin = std::max(fitMin, -40.0), seedMax = std::min(fitMax, -15.0);
+    const int low = std::max(1, hBarDT.FindFixBin(seedMin < seedMax ? seedMin : fitMin));
+    const int high = std::min(nDT, hBarDT.FindFixBin(seedMin < seedMax ? seedMax : fitMax));
+    int peak = low;
+    for (int bin = low+1; bin <= high; ++bin)
+      if (hBarDT.GetBinContent(bin) > hBarDT.GetBinContent(peak)) peak = bin;
+    const int fitLow = std::max(1, hBarDT.FindFixBin(fitMin));
+    const int fitHigh = std::min(nDT, hBarDT.FindFixBin(fitMax));
+    const double background = 0.5*(hBarDT.GetBinContent(fitLow)+hBarDT.GetBinContent(fitHigh));
+    fit.reset(new TF1("fCDetBarProjectedQualityDT_"+tag, "gaus(0)+pol1(3)", fitMin, fitMax));
+    fit->SetParameters(std::max(1.0, hBarDT.GetBinContent(peak)-background), hBarDT.GetBinCenter(peak), 3.0, background, 0.0);
+    const int status = hBarDT.Fit(fit.get(), "RQN0");
+    if (status != 0 || !std::isfinite(fit->GetParameter(1)) ||
+        !std::isfinite(fit->GetParameter(2)) || fit->GetParameter(0) <= 0 ||
+        std::fabs(fit->GetParameter(2)) <= 0 || fit->GetNDF() <= 0) fit.reset();
+    else { fit->SetLineColor(kRed+1); fit->SetLineWidth(2); fit->SetNpx(500); }
+  }
+
+  for (int plot = 0; plot < 2; ++plot) {
+    const TString suffix = plot == 0 ? "pair_ecal_cdet_dt_vs_dx"
+        : TString::Format("bar%03d_ecal_cdet_dt_projected_quality", bar);
+    const TString name = "CDet_"+tag+"_"+suffix;
+    TCanvas *canvas = new TCanvas(name, name, 1400, 900);
+    TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.030);
+    label.DrawLatex(0.04, 0.964, plot == 0
+        ? TString::Format("Run %d | Stored CDet pairs | ECal-CDet #Deltat vs #Deltax", run)
+        : TString::Format("Run %d | ECal projection + pulse-quality selection | Bar %d", run, bar));
+    label.SetTextSize(0.021);
+    label.DrawLatex(0.04, 0.928, TString::Format("ECal energy [%.3g, %.3g] GeV | Timing and alignment from replay", energyMin, energyMax));
+    label.DrawLatex(0.04, 0.896, plot == 0
+        ? TString::Format("N = %.0f stored pairs in %lld events | Full detector | One entry per pair", hPairDTvsDX.GetEntries(), pairEvents)
+        : TString::Format("N = %.0f pulses in %lld events | All pixels %d-%d | Pairing not required", hBarDT.GetEntries(), barEvents, 16*bar, 16*bar+15));
+    if (plot == 1) {
+      label.SetTextSize(0.020);
+      label.DrawLatex(0.04, 0.864, fit
+          ? TString::Format("Gaussian + linear background [%.3g, %.3g] ns: #mu = %.2f #pm %.2f ns; #sigma = %.2f #pm %.2f ns", fitMin, fitMax, fit->GetParameter(1), fit->GetParError(1), std::fabs(fit->GetParameter(2)), fit->GetParError(2))
+          : "Gaussian + linear background: fit unavailable (low statistics or failed fit)");
+    }
+    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, plot == 0 ? 0.865 : 0.832);
+    pad->Draw(); pad->cd();
+    pad->SetLeftMargin(0.13); pad->SetRightMargin(plot == 0 ? 0.16 : 0.04);
+    pad->SetBottomMargin(0.15); pad->SetTopMargin(0.04);
+    if (plot == 0) {
+      hPairDTvsDX.GetXaxis()->SetTitleSize(0.037);
+      hPairDTvsDX.GetYaxis()->SetTitleSize(0.040);
+      hPairDTvsDX.DrawCopy("COLZ");
+    } else {
+      hBarDT.SetMinimum(0);
+      hBarDT.SetMaximum(1.05*std::max({1.0, hBarDT.GetMaximum(), fit ? fit->GetMaximum() : 0.0}));
+      hBarDT.DrawCopy("HIST");
+      if (fit) fit->DrawCopy("SAME");
+    }
+    canvas->Update();
+    if (savePlots) {
+      const TString prefix = TString::Format("%s/CDet_run%d_%s", outputDirectory, run, suffix.Data());
       canvas->SaveAs(prefix+".pdf"); canvas->SaveAs(prefix+".png");
     }
   }
