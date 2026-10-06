@@ -47,20 +47,30 @@ all instrumented pixels in that block, not just the middle eight shown by the
 legacy before/after canvases.
 
 The first canvas uses **one entry per stored `earm.cdet.pair.*` pair**, across
-the full detector. It reproduces the original `hDtvsDxCDetECal` coordinates:
+the full detector. Its horizontal coordinate is the **layer-to-layer x
+trajectory residual**, with both displacements defined as layer 1 minus layer 2:
 
 ```text
 dt = pair.ecal_residual = t_ECal - (t_L1,corr + t_L2,corr)/2
-dx = [(x_L1,corr - x_ECal,projected,L1)
-    + (x_L2,corr - x_ECal,projected,L2)]/2
+dx = (x_L1,corr - x_L2,corr)
+   - (x_ECal,projected,L1 - x_ECal,projected,L2)
+   = (x_L1,corr - x_L2,corr) - (x_ECal/z_ECal)*(z_L1 - z_L2)
+   = -pair.trajectory_residual
 ```
 
 Member positions come from `pulse.x_corr` and `pulse.ecal_x_proj`, indexed by
-`pair.pulse_index_l1/l2`. This dx is the **pair-mean position residual**, not
-`pair.dx` (the inter-layer displacement) or `pair.trajectory_residual` (the
-inter-layer displacement minus the ECal prediction). The routine uses the
-stored assignment as-is; any upstream pair cuts remain part of that sample.
-It applies the configured inclusive ECal energy interval and no new pair cut.
+`pair.pulse_index_l1/l2`. The projected-position difference uses each member's
+stored z geometry, so no fixed layer spacing or new projection is needed.
+For `z_L1 = 5.75 m` and `z_L2 = 5.85 m`, the signed `deltaZ` is `-0.10 m`.
+The replay branch uses layer 2 minus layer 1, hence the minus sign above.
+A pair exactly following the ECal-to-target ray has zero x residual.
+
+This replaces the earlier pair-mean position residual and the original
+master's `hDtvsDxCDetECal` x coordinate. The axis labels show the explicit
+differences without position-average brackets. The timing coordinate still
+uses the pair mean. The routine uses the stored assignment as-is; any upstream
+pair cuts remain part of that sample. It applies the configured inclusive ECal
+energy interval and no new pair cut. Both timing views use the same x residual.
 
 The second canvas exactly reproduces the population of
 `hCDetBar30ECalMinusCDet_ProjectedQuality` in
@@ -141,7 +151,8 @@ cdet_pair_timing/CDet_run6077_pair_ecal_cdet_dt_vs_dx_y_comparison.{pdf,png}
 cdet_pair_timing/CDet_run6077_bar030_ecal_cdet_dt_y_comparison.{pdf,png}
 ```
 
-Validated on 2026-10-06 with ROOT ACLiC and all 354,656 entries in the local
+The initial pair-mean-x version was validated on 2026-10-06 with ROOT ACLiC
+and all 354,656 entries in the local
 Run 6077 replay set. The configured ECal energy interval admitted 201,698
 events; the plots contain 113,689 stored pairs in 58,477 events and 9,470
 Bar-30 pulses in 6,656 events. Of those bar pulses, 2,965 come from events
@@ -164,6 +175,16 @@ centroid changed from `-27.78 +/- 0.08 ns` to `-27.54 +/- 0.08 ns`. These are
 fits to the same events under an assumed propagation model, not a measurement
 of the propagation speed or a claim of a statistically established improvement.
 All four PDF/PNG pairs exported, and the comparison PNG layouts were inspected.
+
+The subsequent x-trajectory-residual revision passed ACLiC compilation and
+synthetic checks of zero residual for an ideal ECal ray, a positive residual
+for a positive layer-1 offset, and a negative residual for a positive layer-2
+offset. Across all 354,656 Run 6077 entries, both paired histograms matched
+independent `TTree::Draw` projections of `-pair.trajectory_residual` bin-for-bin,
+including flow bins, with their respective before/after-y timing. The 113,689
+pair entries and their timing distribution were preserved; both Bar-30 spectra
+also passed the independent reference checks with 9,470 pulses each. The two
+updated paired-plot layouts were visually checked after PDF/PNG export.
 
 ### Legacy hit before/after canvases
 

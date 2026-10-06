@@ -578,8 +578,9 @@ void Plot_CDet_PixelTimingBeforeAfter(
 }
 
 // Two independent samples from the same replay event pass. The 2D plot uses
-// stored pair.* membership and the historical ECal-minus-pair-mean definition;
-// its DX is NOT pair.dx or pair.trajectory_residual. The bar spectrum reproduces
+// stored pair.* membership and ECal-minus-pair-mean timing. Its x coordinate
+// is the L1-minus-L2 trajectory residual, i.e. -pair.trajectory_residual.
+// The bar spectrum reproduces
 // hCDetBar30ECalMinusCDet_ProjectedQuality in the good-pulse diagnostics and
 // includes unpaired pulses. All plotted timing is already corrected, in ns.
 // This entry point does not load or reapply the macro's calibration/polygons.
@@ -694,9 +695,9 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
 
   static unsigned int invocation = 0;
   const TString tag = TString::Format("run%d_bar%03d_%u", run, bar, ++invocation);
-  TH2D hPairDTvsDX("hCDetPairDTvsDX_"+tag, ";<x_{CDet,corr}>_{pair} - <x_{ECal projected}>_{pair} (m);t_{ECal} - <t_{CDet,corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
+  TH2D hPairDTvsDX("hCDetPairDTvsDX_"+tag, ";(x_{1,corr}-x_{2,corr}) - (x_{ECal}/z_{ECal})(z_{1}-z_{2}) (m);t_{ECal} - <t_{CDet,corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
   TH1D hBarDT("hCDetBarProjectedQualityDT_"+tag, TString::Format(";t_{ECal} - t_{CDet,corr} (ns);Pulses / %.3g ns", (dtMax-dtMin)/nDT), nDT, dtMin, dtMax);
-  TH2D hPairYDTvsDX("hCDetPairYCorrectedDTvsDX_"+tag, ";<x_{CDet,corr}>_{pair} - <x_{ECal projected}>_{pair} (m);t_{ECal} - <t_{CDet,y corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
+  TH2D hPairYDTvsDX("hCDetPairYCorrectedDTvsDX_"+tag, ";(x_{1,corr}-x_{2,corr}) - (x_{ECal}/z_{ECal})(z_{1}-z_{2}) (m);t_{ECal} - <t_{CDet,y corr}>_{pair} (ns);Pairs", nDX, dxMin, dxMax, nDT, dtMin, dtMax);
   TH1D hBarYDT("hCDetBarYCorrectedDT_"+tag, TString::Format(";t_{ECal} - t_{CDet} (ns);Pulses / %.3g ns", (dtMax-dtMin)/nDT), nDT, dtMin, dtMax);
   for (TH1 *hist : {static_cast<TH1*>(&hPairDTvsDX), static_cast<TH1*>(&hBarDT), static_cast<TH1*>(&hPairYDTvsDX), static_cast<TH1*>(&hBarYDT)}) {
     hist->SetDirectory(nullptr); hist->SetStats(false);
@@ -733,7 +734,9 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
         ++malformedPairs; continue;
       }
       const size_t i1 = size_t(index1), i2 = size_t(index2);
-      const double dx = 0.5*((x[i1]-projectedX[i1]) + (x[i2]-projectedX[i2]));
+      // Both differences use L1 minus L2: projectedX1-projectedX2 is
+      // (x_ECal/z_ECal)*(z1-z2), with signed dz (not the positive spacing).
+      const double dx = (x[i1]-x[i2]) - (projectedX[i1]-projectedX[i2]);
       if (!(pixel[i1] >= 0 && pixel[i1] < 1344 && pixel[i2] >= 1344 && pixel[i2] < NumCDetPaddles) ||
           !std::isfinite(dx) || !std::isfinite(pairDT[p])) {
         ++malformedPairs; continue;
@@ -827,7 +830,7 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
     TCanvas *canvas = new TCanvas(name, name, 1400, 900);
     TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.030);
     label.DrawLatex(0.04, 0.964, plot == 0
-        ? TString::Format("Run %d | Stored CDet pairs | ECal-CDet #Deltat vs #Deltax", run)
+        ? TString::Format("Run %d | Stored CDet pairs | ECal-CDet #Deltat vs x trajectory residual", run)
         : TString::Format("Run %d | ECal projection + pulse-quality selection | Bar %d", run, bar));
     label.SetTextSize(0.021);
     label.DrawLatex(0.04, 0.928, TString::Format("ECal energy [%.3g, %.3g] GeV | Timing and alignment from replay", energyMin, energyMax));
@@ -846,6 +849,7 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
     pad->SetBottomMargin(0.15); pad->SetTopMargin(0.04);
     if (plot == 0) {
       hPairDTvsDX.GetXaxis()->SetTitleSize(0.037);
+      hPairDTvsDX.GetXaxis()->SetTitleOffset(1.4);
       hPairDTvsDX.GetYaxis()->SetTitleSize(0.040);
       hPairDTvsDX.DrawCopy("COLZ");
     } else {
@@ -866,7 +870,7 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
   const TString pairName = "CDet_"+tag+"_pair_y_comparison";
   TCanvas *pairCanvas = new TCanvas(pairName, pairName, 1900, 950);
   TLatex label; label.SetNDC(); label.SetTextFont(42); label.SetTextSize(0.029);
-  label.DrawLatex(0.035, 0.961, TString::Format("Run %d | Stored-pair ECal-CDet #Deltat vs #Deltax | y propagation comparison", run));
+  label.DrawLatex(0.035, 0.961, TString::Format("Run %d | Stored-pair ECal-CDet #Deltat vs x trajectory residual | y propagation comparison", run));
   label.SetTextSize(0.021);
   label.DrawLatex(0.035, 0.921, TString::Format("Same %.0f pairs | ECal energy [%.3g, %.3g] GeV | n = %.3g; |dt/dy| = %.3f ns/m | Matched color scales", hPairDTvsDX.GetEntries(), energyMin, energyMax, yCorrectionRefractiveIndex, ySlopeMagnitude));
   TPad *pairGrid = new TPad(pairName+"_grid", "", 0, 0, 1, 0.89);
@@ -877,6 +881,7 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
     gPad->SetBottomMargin(0.16); gPad->SetTopMargin(0.09);
     TH2D& hist = state ? hPairYDTvsDX : hPairDTvsDX;
     hist.GetXaxis()->SetTitleSize(0.031); hist.GetYaxis()->SetTitleSize(0.036);
+    hist.GetXaxis()->SetTitleOffset(1.6);
     hist.GetZaxis()->SetTitleSize(0.038); hist.GetZaxis()->SetTitleOffset(1.4);
     for (TAxis *axis : {hist.GetXaxis(), hist.GetYaxis(), hist.GetZaxis()}) axis->SetLabelSize(0.037);
     hist.SetMinimum(0); hist.SetMaximum(colorMax); hist.DrawCopy("COLZ");
