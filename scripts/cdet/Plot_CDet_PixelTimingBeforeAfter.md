@@ -121,6 +121,9 @@ a partially corrected comparison.
 The pair comparison shows the two 2D distributions side by side with matching
 color scales. The bar comparison overlays the spectra and separately fits
 both with the same Gaussian plus linear-background model and fit interval.
+The bar canvases display the histograms without fit curves or fit-result text;
+the comparison legend identifies only the before/after-y histograms. Fit
+centroids, widths, uncertainties, and the fit interval print in the terminal.
 This is a model-based timing diagnostic; it does not refit a propagation
 speed, rerun selection, modify the ROOT input, or install new calibration.
 
@@ -141,7 +144,7 @@ not required. This routine uses that argument, not the master's separate
 
 Ranges control the displayed histograms, not selection. The bar spectrum uses
 the existing diagnostic's Gaussian plus linear-background fit and default
-fit/peak-seed windows. The fit is for display and never updates calibration.
+fit/peak-seed windows. The fit is diagnostic and never updates calibration.
 All canvases remain open and save PDF/PNG by default:
 
 ```text

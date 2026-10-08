@@ -818,9 +818,16 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
               << " pulses; mean " << hBarDT.GetMean() << " -> " << hBarYDT.GetMean()
               << " ns; SD (including tails) " << hBarDT.GetStdDev() << " -> "
               << hBarYDT.GetStdDev() << " ns.\n";
-    if (fit && yFit)
-      std::cout << "[CDet pair/bar timing] Bar peak sigma " << std::fabs(fit->GetParameter(2))
-                << " -> " << std::fabs(yFit->GetParameter(2)) << " ns.\n";
+  }
+  // Keep the fit diagnostic in the terminal; the bar canvases show spectra only.
+  for (int state = 0; state < (applyYCorrection ? 2 : 1); ++state) {
+    TF1 *currentFit = state ? yFit.get() : fit.get();
+    std::cout << "[CDet pair/bar timing] Bar " << bar << " "
+              << (state ? "after y" : "before y") << ": "
+              << (currentFit
+                  ? TString::Format("Gaussian + linear background [%.3g, %.3g] ns: mu = %.2f +/- %.2f ns; sigma = %.2f +/- %.2f ns", fitMin, fitMax, currentFit->GetParameter(1), currentFit->GetParError(1), std::fabs(currentFit->GetParameter(2)), currentFit->GetParError(2))
+                  : TString("fit unavailable (low statistics or failed fit)"))
+              << "\n";
   }
 
   for (int plot = 0; plot < 2; ++plot) {
@@ -837,13 +844,7 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
     label.DrawLatex(0.04, 0.896, plot == 0
         ? TString::Format("N = %.0f stored pairs in %lld events | Full detector | One entry per pair", hPairDTvsDX.GetEntries(), pairEvents)
         : TString::Format("N = %.0f pulses in %lld events | All pixels %d-%d | Pairing not required", hBarDT.GetEntries(), barEvents, 16*bar, 16*bar+15));
-    if (plot == 1) {
-      label.SetTextSize(0.020);
-      label.DrawLatex(0.04, 0.864, fit
-          ? TString::Format("Gaussian + linear background [%.3g, %.3g] ns: #mu = %.2f #pm %.2f ns; #sigma = %.2f #pm %.2f ns", fitMin, fitMax, fit->GetParameter(1), fit->GetParError(1), std::fabs(fit->GetParameter(2)), fit->GetParError(2))
-          : "Gaussian + linear background: fit unavailable (low statistics or failed fit)");
-    }
-    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, plot == 0 ? 0.865 : 0.832);
+    TPad *pad = new TPad(name+"_plot", "", 0, 0, 1, 0.865);
     pad->Draw(); pad->cd();
     pad->SetLeftMargin(0.13); pad->SetRightMargin(plot == 0 ? 0.16 : 0.04);
     pad->SetBottomMargin(0.15); pad->SetTopMargin(0.04);
@@ -854,9 +855,8 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
       hPairDTvsDX.DrawCopy("COLZ");
     } else {
       hBarDT.SetMinimum(0);
-      hBarDT.SetMaximum(1.05*std::max({1.0, hBarDT.GetMaximum(), fit ? fit->GetMaximum() : 0.0}));
+      hBarDT.SetMaximum(1.05*std::max(1.0, hBarDT.GetMaximum()));
       hBarDT.DrawCopy("HIST");
-      if (fit) fit->DrawCopy("SAME");
     }
     canvas->Update();
     if (savePlots) {
@@ -896,27 +896,17 @@ void Plot_CDet_PairDTvsDXAndBarTiming(
   label.DrawLatex(0.04, 0.964, TString::Format("Run %d | Bar %d | ECal projection + pulse quality | y propagation comparison", run, bar));
   label.SetTextSize(0.021);
   label.DrawLatex(0.04, 0.927, TString::Format("Same %.0f pulses in %lld events | ECal energy [%.3g, %.3g] GeV | n = %.3g; |dt/dy| = %.3f ns/m", hBarDT.GetEntries(), barEvents, energyMin, energyMax, yCorrectionRefractiveIndex, ySlopeMagnitude));
-  for (int state = 0; state < 2; ++state) {
-    TF1 *currentFit = state ? yFit.get() : fit.get();
-    label.DrawLatex(0.04, 0.893-0.033*state, currentFit
-        ? TString::Format("%s: #mu = %.2f #pm %.2f ns; #sigma = %.2f #pm %.2f ns | Gaussian + linear background [%.3g, %.3g] ns", state ? "After y" : "Before y", currentFit->GetParameter(1), currentFit->GetParError(1), std::fabs(currentFit->GetParameter(2)), currentFit->GetParError(2), fitMin, fitMax)
-        : TString::Format("%s: fit unavailable", state ? "After y" : "Before y"));
-  }
-  TPad *barPad = new TPad(barName+"_plot", "", 0, 0, 1, 0.830);
+  TPad *barPad = new TPad(barName+"_plot", "", 0, 0, 1, 0.89);
   barPad->Draw(); barPad->cd();
   barPad->SetLeftMargin(0.13); barPad->SetRightMargin(0.04);
   barPad->SetBottomMargin(0.15); barPad->SetTopMargin(0.04);
   hBarDT.GetXaxis()->SetTitle("t_{ECal} - t_{CDet} (ns)");
-  hBarDT.SetMaximum(1.05*std::max({1.0, hBarDT.GetBinContent(hBarDT.GetMaximumBin()), hBarYDT.GetMaximum(), fit ? fit->GetMaximum() : 0.0, yFit ? yFit->GetMaximum() : 0.0}));
+  hBarDT.SetMaximum(1.05*std::max({1.0, hBarDT.GetBinContent(hBarDT.GetMaximumBin()), hBarYDT.GetMaximum()}));
   TH1 *beforeDraw = hBarDT.DrawCopy("HIST"), *afterDraw = hBarYDT.DrawCopy("HIST SAME");
-  TF1 *beforeFitDraw = fit ? fit->DrawCopy("SAME") : nullptr;
-  TF1 *afterFitDraw = yFit ? yFit->DrawCopy("SAME") : nullptr;
-  TLegend legend(0.61, 0.73, 0.92, 0.92);
+  TLegend legend(0.61, 0.82, 0.92, 0.92);
   legend.SetBorderSize(0); legend.SetFillStyle(0); legend.SetTextSize(0.027);
   legend.AddEntry(beforeDraw, "Before y correction", "l");
   legend.AddEntry(afterDraw, "After y correction", "l");
-  if (beforeFitDraw) legend.AddEntry(beforeFitDraw, "Before-y peak fit", "l");
-  if (afterFitDraw) legend.AddEntry(afterFitDraw, "After-y peak fit", "l");
   legend.DrawClone();
   barCanvas->Update();
   if (savePlots) {
