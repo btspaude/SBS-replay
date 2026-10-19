@@ -14,6 +14,8 @@
 //   Plot_CDet_PulsePixelTiming("CDet_run6077_pulse_pixel_timing.conf", "bar19_open_tot", 19, "/path/to/Rootfiles", 10000);
 // An empty tag defaults to run<run>_bar<study>_control<control>. Reusing a tag
 // replaces matching PDFs. Tags use letters, numbers, underscores, and hyphens.
+// display.ecal_cdet_dt_min/max set the dt axes in ns for 1D and dt-versus-dx
+// plots. Explicit axis arguments override the config; NAN uses the defaults.
 //
 // Global bar IDs are 0..167; bar 30 contains logical pixels 480..495.
 // pulse.ecal_residual is already t_ECal - t_CDet,corr in ns, including the
@@ -219,9 +221,9 @@ void Plot_CDet_PulsePixelTiming(
     const char *configFile = "CDet_run6077_pulse_pixel_timing.conf", int bar = -1,
     const char *inputDirectory = nullptr, Long64_t eventsOverride = -2,
     double ecalDTBinWidthNs = 1.0,
-    double ecalDTMinNs = -150.0, double ecalDTMaxNs = 150.0,
+    double ecalDTMinNs = NAN, double ecalDTMaxNs = NAN,
     double ecalDXBinWidthM = 0.005, double ecalDXMinM = -0.10, double ecalDXMaxM = 0.10,
-    double dtVsDxMinNs = -150.0, double dtVsDxMaxNs = 150.0,
+    double dtVsDxMinNs = NAN, double dtVsDxMaxNs = NAN,
     double leBinWidthNs = 1.0, double leMinNs = -20.0, double leMaxNs = 100.0,
     double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0,
     const char *outputTag = nullptr)
@@ -242,6 +244,11 @@ void Plot_CDet_PulsePixelTiming(
       ? config.GetValue("analysis.events", -1) : eventsOverride;
   const int minSegment = config.GetValue("analysis.min_segment", -1);
   const int maxSegment = config.GetValue("analysis.max_segment", -1);
+  // Resolve optional axis overrides before validating ranges and making bins.
+  if (std::isnan(ecalDTMinNs)) ecalDTMinNs = config.GetValue("display.ecal_cdet_dt_min", -150.0);
+  if (std::isnan(ecalDTMaxNs)) ecalDTMaxNs = config.GetValue("display.ecal_cdet_dt_max", 150.0);
+  if (std::isnan(dtVsDxMinNs)) dtVsDxMinNs = ecalDTMinNs;
+  if (std::isnan(dtVsDxMaxNs)) dtVsDxMaxNs = ecalDTMaxNs;
   const double energyMin = config.GetValue("analysis.ecal_energy_min", NAN);
   const double energyMax = config.GetValue("analysis.ecal_energy_max", NAN);
   const double leCutMinNs = config.GetValue("analysis.le_min", 0.02);
@@ -700,9 +707,9 @@ void Plot_CDet_PulsePixelTiming(
 void Plot_CDet_PulsePixelTiming(
     int runNumber, int bar = -1, const char *inputDirectory = nullptr,
     Long64_t eventsOverride = -2, double ecalDTBinWidthNs = 1.0,
-    double ecalDTMinNs = -150.0, double ecalDTMaxNs = 150.0,
+    double ecalDTMinNs = NAN, double ecalDTMaxNs = NAN,
     double ecalDXBinWidthM = 0.005, double ecalDXMinM = -0.10, double ecalDXMaxM = 0.10,
-    double dtVsDxMinNs = -150.0, double dtVsDxMaxNs = 150.0,
+    double dtVsDxMinNs = NAN, double dtVsDxMaxNs = NAN,
     double leBinWidthNs = 1.0, double leMinNs = -20.0, double leMaxNs = 100.0,
     double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0,
     const char *outputTag = nullptr)
@@ -715,13 +722,13 @@ void Plot_CDet_PulsePixelTiming(
                            outputTag);
 }
 
-// Convenient tagged calls retain the default plot axes and existing call forms.
+// Convenient tagged calls use the configured dt axes and existing call forms.
 void Plot_CDet_PulsePixelTiming(
     const char *configFile, const char *outputTag, int bar = -1,
     const char *inputDirectory = nullptr, Long64_t eventsOverride = -2)
 {
   Plot_CDet_PulsePixelTiming(configFile, bar, inputDirectory, eventsOverride,
-                           1.0, -150.0, 150.0, 0.005, -0.10, 0.10, -150.0, 150.0,
+                           1.0, NAN, NAN, 0.005, -0.10, 0.10, NAN, NAN,
                            1.0, -20.0, 100.0, 1.0, 0.0, 100.0, outputTag);
 }
 
