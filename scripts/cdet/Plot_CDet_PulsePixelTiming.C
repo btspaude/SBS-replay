@@ -7,6 +7,13 @@
 //   Plot_CDet_PulsePixelTiming("CDet_run6077_pulse_pixel_timing.conf", 19, "/path/to/Rootfiles", 10000);
 // Numeric shorthand reads CDet_run<run>_pulse_pixel_timing.conf:
 //   Plot_CDet_PulsePixelTiming(6077, 19);
+// All thirteen canvases save as PDFs under PulsePixelTiming/<tag>/, relative
+// to the working directory. Set pulse_pixel_timing.output_tag in the config,
+// or override it with the convenient tagged call (remaining arguments optional):
+//   Plot_CDet_PulsePixelTiming(6077, "bar19_open_tot", 19);
+//   Plot_CDet_PulsePixelTiming("CDet_run6077_pulse_pixel_timing.conf", "bar19_open_tot", 19, "/path/to/Rootfiles", 10000);
+// An empty tag defaults to run<run>_bar<study>_control<control>. Reusing a tag
+// replaces matching PDFs. Tags use letters, numbers, underscores, and hyphens.
 //
 // Global bar IDs are 0..167; bar 30 contains logical pixels 480..495.
 // pulse.ecal_residual is already t_ECal - t_CDet,corr in ns, including the
@@ -216,7 +223,8 @@ void Plot_CDet_PulsePixelTiming(
     double ecalDXBinWidthM = 0.005, double ecalDXMinM = -0.10, double ecalDXMaxM = 0.10,
     double dtVsDxMinNs = -150.0, double dtVsDxMaxNs = 150.0,
     double leBinWidthNs = 1.0, double leMinNs = -20.0, double leMaxNs = 100.0,
-    double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0)
+    double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0,
+    const char *outputTag = nullptr)
 {
   using namespace CDetPulsePixelTiming;
   TEnv config;
@@ -314,6 +322,26 @@ void Plot_CDet_PulsePixelTiming(
   }
   // -1 reads all entries; a nonnegative value limits the number processed.
   const Long64_t limit = events >= 0 ? std::min(events, total) : total;
+
+  // Prepare a tagged output directory before processing the events.
+  TString tag = outputTag ? outputTag : config.GetValue("pulse_pixel_timing.output_tag", "");
+  if (tag.IsNull()) tag = TString::Format("run%d_bar%d_control%d", runNumber, bar, controlBar);
+  const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (int i = 0; i < tag.Length(); ++i) {
+    if (allowedTagCharacters.First(tag[i]) == kNPOS) {
+      std::cerr << "[CDet pulse pixel timing] Output tag may contain only letters, numbers, underscores, and hyphens.\n";
+      return;
+    }
+  }
+  const TString outputDirectory = TString::Format("%s/PulsePixelTiming/%s", gSystem->WorkingDirectory(), tag.Data());
+  if (gSystem->AccessPathName(outputDirectory)) gSystem->mkdir(outputDirectory, true);
+  FileStat_t outputInfo;
+  if (gSystem->GetPathInfo(outputDirectory, outputInfo) != 0 || !R_ISDIR(outputInfo.fMode) ||
+      gSystem->AccessPathName(outputDirectory, kWritePermission)) {
+    std::cerr << "[CDet pulse pixel timing] Cannot write output directory: " << outputDirectory << '\n';
+    return;
+  }
+  std::cout << "[CDet pulse pixel timing] PDF output: " << outputDirectory << '\n';
 
   // 2. Bind the initial pulse branches. No pair.* branches are needed.
 
@@ -647,11 +675,20 @@ void Plot_CDet_PulsePixelTiming(
   cControlBarLeToT->Modified();
   cControlBarLeToT->Update();
 
+  // Save only canvases from this invocation, preserving the displayed panels.
+  TCanvas* outputCanvases[] = {cPixelDt, cBarDt, cControlPixelDt, cControlBarDt,
+      cBarDtVsDx, cControlBarDtVsDx, cDetectorDtVsDx, cPixelLe, cControlPixelLe,
+      cPixelLeVsToT, cControlPixelLeVsToT, cBarLeToT, cControlBarLeToT};
+  for (TCanvas* canvas : outputCanvases) {
+    canvas->SaveAs(TString::Format("%s/%s.pdf", outputDirectory.Data(), canvas->GetName()));
+  }
+
   std::cout << "[CDet pulse pixel timing] Read " << processed << " events; "
             << energyEvents << " passed the ECal energy cut; " << selectedPulses
             << " pulses in bar " << bar << " and " << controlPulses
             << " in control bar " << controlBar << "; " << detectorPulses
-            << " across the detector. Drew thirteen canvases.\n";
+            << " across the detector. Drew thirteen canvases.\n"
+            << "  PDF output directory: " << outputDirectory << '\n';
   if (useEllipse)
     std::cout << "  Before -> after ellipse: study " << hBarDtVsDxBefore->GetEntries()
               << " -> " << selectedPulses << "; control " << hControlBarDtVsDxBefore->GetEntries()
@@ -667,11 +704,31 @@ void Plot_CDet_PulsePixelTiming(
     double ecalDXBinWidthM = 0.005, double ecalDXMinM = -0.10, double ecalDXMaxM = 0.10,
     double dtVsDxMinNs = -150.0, double dtVsDxMaxNs = 150.0,
     double leBinWidthNs = 1.0, double leMinNs = -20.0, double leMaxNs = 100.0,
-    double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0)
+    double totBinWidthNs = 1.0, double totMinNs = 0.0, double totMaxNs = 100.0,
+    const char *outputTag = nullptr)
 {
   const TString configFile = TString::Format("CDet_run%d_pulse_pixel_timing.conf", runNumber);
   Plot_CDet_PulsePixelTiming(configFile.Data(), bar, inputDirectory, eventsOverride,
                            ecalDTBinWidthNs, ecalDTMinNs, ecalDTMaxNs,
                            ecalDXBinWidthM, ecalDXMinM, ecalDXMaxM, dtVsDxMinNs, dtVsDxMaxNs,
-                           leBinWidthNs, leMinNs, leMaxNs, totBinWidthNs, totMinNs, totMaxNs);
+                           leBinWidthNs, leMinNs, leMaxNs, totBinWidthNs, totMinNs, totMaxNs,
+                           outputTag);
+}
+
+// Convenient tagged calls retain the default plot axes and existing call forms.
+void Plot_CDet_PulsePixelTiming(
+    const char *configFile, const char *outputTag, int bar = -1,
+    const char *inputDirectory = nullptr, Long64_t eventsOverride = -2)
+{
+  Plot_CDet_PulsePixelTiming(configFile, bar, inputDirectory, eventsOverride,
+                           1.0, -150.0, 150.0, 0.005, -0.10, 0.10, -150.0, 150.0,
+                           1.0, -20.0, 100.0, 1.0, 0.0, 100.0, outputTag);
+}
+
+void Plot_CDet_PulsePixelTiming(
+    int runNumber, const char *outputTag, int bar = -1,
+    const char *inputDirectory = nullptr, Long64_t eventsOverride = -2)
+{
+  const TString configFile = TString::Format("CDet_run%d_pulse_pixel_timing.conf", runNumber);
+  Plot_CDet_PulsePixelTiming(configFile.Data(), outputTag, bar, inputDirectory, eventsOverride);
 }

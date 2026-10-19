@@ -41,3 +41,6 @@
 
 # macOS Finder metadata
 .DS_Store
+
+# Generated standalone pulse-timing plots
+PulsePixelTiming/
