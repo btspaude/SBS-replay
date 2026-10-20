@@ -1059,3 +1059,233 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
             << "  Values outside the display bounds remain in underflow/overflow bins.\n"
             << "  PDF output: " << outputDirectory << '\n';
 }
+
+
+// 8. Background-study outline. Uses the saved vectors; run the main macro first.
+// Add your selection expressions, histograms, fills, and canvases below.
+// ECal time is filled once per event passing the energy/time selections below.
+void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
+                             const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
+                             double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
+                             double ECalBinWidth = 0.5, double ECalDisplayMin = NAN, double ECalDisplayMax = NAN,
+                             double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN,
+                             double RxBinWidth = 0.002, double RxMin = NAN, double RxMax = NAN)
+{
+  TEnv config;
+  if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
+      config.GetValue("config.version", 0) != 1) {
+    std::cerr << "[CDet pulse background] Cannot read configuration with config.version: 1.\n";
+    return;
+  }
+  if (studyBar == -1) studyBar = config.GetValue("pulse_pixel_timing.study_bar", 19);
+  if (controlBar == -1) controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
+  if (std::isnan(BinWidth)) BinWidth = config.GetValue("pulse_study.dt_bin_width_ns", 1.0);
+  if (std::isnan(DtMin)) DtMin = config.GetValue("display.ecal_cdet_dt_min", -90.0);
+  if (std::isnan(DtMax)) DtMax = config.GetValue("display.ecal_cdet_dt_max", 0.0);
+
+  if (std::isnan(ECalDisplayMin)) ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
+  if (std::isnan(ECalDisplayMax)) ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
+
+  // Existing secondary-cut settings.
+  // Saved vectors already have the main macro's loading cuts applied.
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
+  const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
+  const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
+  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
+  const double LeMin = config.GetValue("analysis.le_min", 0.02);
+  const double LeMax = config.GetValue("analysis.le_max", 60.0);
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const double TotMin = config.GetValue("analysis.tot_min", 4.0);
+  const double TotMax = config.GetValue("analysis.tot_max", 30.0);
+  const double xRes = config.GetValue("analysis.x_difference_max", 0.08); // Existing rx-cut key.
+
+  if (std::isnan(PositionBinWidth)) PositionBinWidth = config.GetValue("pulse_study.position_bin_width_m", 0.005);
+  if (std::isnan(PositionMin)) PositionMin = config.GetValue("pulse_study.position_min_m", -1.6);
+  if (std::isnan(PositionMax)) PositionMax = config.GetValue("pulse_study.position_max_m", 1.6);
+  if (std::isnan(RxMin)) RxMin = -xRes;
+  if (std::isnan(RxMax)) RxMax = xRes;
+  if (!std::isfinite(PositionBinWidth) || PositionBinWidth <= 0 ||
+      !std::isfinite(PositionMin) || !std::isfinite(PositionMax) || PositionMin >= PositionMax ||
+      !std::isfinite((PositionMax - PositionMin) / PositionBinWidth) ||
+      std::ceil((PositionMax - PositionMin) / PositionBinWidth) > std::numeric_limits<int>::max() - 2 ||
+      !std::isfinite(RxBinWidth) || RxBinWidth <= 0 ||
+      !std::isfinite(RxMin) || !std::isfinite(RxMax) || RxMin >= RxMax ||
+      !std::isfinite((RxMax - RxMin) / RxBinWidth) ||
+      std::ceil((RxMax - RxMin) / RxBinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse background] Invalid position or rx display settings.\n";
+    return;
+  }
+
+  if (studyBar < 0 || studyBar >= numBars || controlBar < 0 || controlBar >= numBars ||
+      !std::isfinite(BinWidth) || BinWidth <= 0 || !std::isfinite(DtMin) ||
+      !std::isfinite(DtMax) || DtMin >= DtMax ||
+      !std::isfinite((DtMax - DtMin) / BinWidth) ||
+      std::ceil((DtMax - DtMin) / BinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse background] Invalid bar IDs or dt display settings.\n";
+    return;
+  }
+  if (!std::isfinite(ECalBinWidth) || ECalBinWidth <= 0 ||
+      !std::isfinite(ECalDisplayMin) || !std::isfinite(ECalDisplayMax) || ECalDisplayMin >= ECalDisplayMax ||
+      !std::isfinite((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) ||
+      std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) > std::numeric_limits<int>::max() - 2 ||
+      !std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT ||
+      !std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE) {
+    std::cerr << "[CDet pulse background] Invalid ECal display settings or cuts.\n";
+    return;
+  }
+  if (vPulseID.empty()) {
+    std::cerr << "[CDet pulse background] No saved pulse events; run the main macro first.\n";
+    return;
+  }
+  const int nECalTimeBins = int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth));
+  const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
+  const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
+  const int nRxBins = int(std::ceil((RxMax - RxMin) / RxBinWidth));
+  TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
+  if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
+  const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (int i = 0; i < tag.Length(); ++i) {
+    if (allowedTagCharacters.First(tag[i]) == kNPOS) {
+      std::cerr << "[CDet pulse background] Output tag may contain only letters, numbers, underscores, and hyphens.\n";
+      return;
+    }
+  }
+  const TString outputDirectory = TString::Format("%s/PusleStudy/%s", gSystem->WorkingDirectory(), tag.Data());
+
+  if (gSystem->AccessPathName(outputDirectory)) gSystem->mkdir(outputDirectory, true);
+  FileStat_t outputInfo;
+  if (gSystem->GetPathInfo(outputDirectory, outputInfo) != 0 || !R_ISDIR(outputInfo.fMode) ||
+      gSystem->AccessPathName(outputDirectory, kWritePermission)) {
+    std::cerr << "[CDet pulse background] Cannot write output directory: " << outputDirectory << '\n';
+    return;
+  }
+
+  // Replace this routine's canvases/histograms on repeated calls.
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundECalTime");
+  static TH1D* hECalT = nullptr;
+  delete hECalT;
+
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundDtVsRx");
+  static TH2D* hDtVsRx = nullptr;
+  delete hDtVsRx;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundDt");
+  static TH1D* hDt = nullptr;
+  delete hDt;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundCDetX");
+  static TH1D* hCDetX = nullptr;
+  delete hCDetX;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundCDetXCorr");
+  static TH1D* hCDetXCorr = nullptr;
+  delete hCDetXCorr;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundCDetXCorrVsX");
+  static TH2D* hCDetXCorrVsX = nullptr;
+  delete hCDetXCorrVsX;
+
+  // Define histograms before the event/hit loop.
+  hECalT = new TH1D("hPulseBackgroundECalTime", TString::Format("ECal ADC time: %.1f #leq t #leq %.1f ns;ECal ADC time (ns);Events", ECalMinT, ECalMaxT), nECalTimeBins, ECalDisplayMin, ECalDisplayMax);
+  hECalT->SetDirectory(nullptr);
+  hDtVsRx = new TH2D("hPulseBackgroundDtVsRx", TString::Format("Bar %d: dt versus rx;rx (m);Stored pulse.ecal_residual (ns);Pulses", controlBar), nRxBins, RxMin, RxMax, nDtBins, DtMin, DtMax);
+  hDt = new TH1D("hPulseBackgroundDt", TString::Format("Bar %d: dt;Stored pulse.ecal_residual (ns);Pulses", controlBar), nDtBins, DtMin, DtMax);
+  hCDetX = new TH1D("hPulseBackgroundCDetX", TString::Format("Bar %d: channel x;Channel CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
+  hCDetXCorr = new TH1D("hPulseBackgroundCDetXCorr", TString::Format("Bar %d: aligned x;Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
+  hCDetXCorrVsX = new TH2D("hPulseBackgroundCDetXCorrVsX", TString::Format("Bar %d: aligned x versus channel x;Channel CDet x (m);Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax, nPositionBins, PositionMin, PositionMax);
+  hDtVsRx->SetDirectory(nullptr);
+  hDt->SetDirectory(nullptr);
+  hCDetX->SetDirectory(nullptr);
+  hCDetXCorr->SetDirectory(nullptr);
+  hCDetXCorrVsX->SetDirectory(nullptr);
+
+  for (size_t event = 0; event < vPulseID.size(); ++event) {
+    const double e_ECal = vECalE[event];
+    const double t_ECal = vECalAdcTime[event];
+    const double x_ECal = vECalX[event];
+    const double y_ECal = vECalY[event];
+
+    bool good_ecal_time = t_ECal >= ECalMinT && t_ECal <= ECalMaxT;
+    bool good_ecal_energy = e_ECal >= ECalMinE && e_ECal <= ECalMaxE;
+    const bool good_ecal_event = good_ecal_time && good_ecal_energy;
+    if (!good_ecal_event) continue;
+    hECalT->Fill(t_ECal);
+
+    for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
+      const double id = vPulseID[event][hit];
+      if (!std::isfinite(id) || id < 0 || id >= numBars * pixelsPerBar || std::floor(id) != id) continue;
+      const int bar = int(id) / pixelsPerBar;
+      const int pixel = int(id) % pixelsPerBar;
+      if (bar != controlBar) continue;
+
+      const double dt = vPulseDt[event][hit]; // pulse.ecal_residual, ns.
+      const double le = vPulseLe[event][hit]; // Uncorrected LE, already in ns.
+      const double leCorr = vPulseLeCorr[event][hit];
+      const double tot = vPulseToT[event][hit];
+      const double rx = vPulseXResiduals[event][hit];
+      const double ry = vPulseYResiduals[event][hit];
+      const double x = vPulseX[event][hit];
+      const double xCorr = vPulseXCorr[event][hit];
+      const double y = vPulseY[event][hit];
+      const double z = vPulseZ[event][hit];
+      const double xProj = vECalXProjection[event][hit];
+      const double yProj = vECalYProjection[event][hit];
+      const bool goodCalib = vPulseGoodCalib[event][hit];
+
+      bool good_cdet_le = leCorr >= LeMin && leCorr <= LeMax;
+      bool good_cdet_tot = tot >= TotMin && tot <= TotMax;
+      const bool good_cdet_hit = good_cdet_le && good_cdet_tot; //good cdet hit condition
+      if (!good_cdet_hit) continue;
+      hDtVsRx->Fill(rx,dt);
+      hDt->Fill(dt);
+      hCDetX->Fill(x);
+      hCDetXCorr->Fill(xCorr);
+      hCDetXCorrVsX->Fill(x,xCorr);
+
+    }
+  }
+
+  // Draw after filling; keep the caller's ROOT mode so canvases stay interactive.
+  TCanvas* cECalT = new TCanvas("cPulseBackgroundECalTime", TString::Format("ECal ADC time: %.1f <= t <= %.1f ns", ECalMinT, ECalMaxT), 900, 650);
+  hECalT->Draw("HIST");
+  cECalT->Modified();
+  cECalT->Update();
+  cECalT->SaveAs(TString::Format("%s/background_ecal_adc_time.pdf", outputDirectory.Data()));
+
+  TCanvas* cDtVsRx = new TCanvas("cPulseBackgroundDtVsRx", TString::Format("Bar %d: dt versus rx", controlBar), 900, 650);
+  hDtVsRx->SetStats(false);
+  gPad->SetRightMargin(0.15);
+  hDtVsRx->Draw("COLZ");
+  cDtVsRx->Modified();
+  cDtVsRx->Update();
+  cDtVsRx->SaveAs(TString::Format("%s/bar%03d_background_dt_vs_rx.pdf", outputDirectory.Data(), controlBar));
+
+  TCanvas* cDt = new TCanvas("cPulseBackgroundDt", TString::Format("Bar %d: dt", controlBar), 900, 650);
+  hDt->Draw("HIST");
+  cDt->Modified();
+  cDt->Update();
+  cDt->SaveAs(TString::Format("%s/bar%03d_background_dt.pdf", outputDirectory.Data(), controlBar));
+
+  TCanvas* cCDetX = new TCanvas("cPulseBackgroundCDetX", TString::Format("Bar %d: channel x", controlBar), 900, 650);
+  hCDetX->Draw("HIST");
+  cCDetX->Modified();
+  cCDetX->Update();
+  cCDetX->SaveAs(TString::Format("%s/bar%03d_background_x.pdf", outputDirectory.Data(), controlBar));
+
+  TCanvas* cCDetXCorr = new TCanvas("cPulseBackgroundCDetXCorr", TString::Format("Bar %d: aligned x", controlBar), 900, 650);
+  hCDetXCorr->Draw("HIST");
+  cCDetXCorr->Modified();
+  cCDetXCorr->Update();
+  cCDetXCorr->SaveAs(TString::Format("%s/bar%03d_background_x_corr.pdf", outputDirectory.Data(), controlBar));
+
+  TCanvas* cCDetXCorrVsX = new TCanvas("cPulseBackgroundCDetXCorrVsX", TString::Format("Bar %d: aligned x versus channel x", controlBar), 900, 650);
+  hCDetXCorrVsX->SetStats(false);
+  gPad->SetRightMargin(0.15);
+  hCDetXCorrVsX->Draw("COLZ");
+  cCDetXCorrVsX->Modified();
+  cCDetXCorrVsX->Update();
+  cCDetXCorrVsX->SaveAs(TString::Format("%s/bar%03d_background_x_corr_vs_x.pdf", outputDirectory.Data(), controlBar));
+
+  std::cout << "[CDet pulse background] Filled ECal time for " << hECalT->GetEntries()
+            << " selected events and CDet histograms for " << hDt->GetEntries()
+            << " selected pulses in bar " << controlBar << ". Six canvases remain open.\n"
+            << "  PDF output: " << outputDirectory << '\n';
+}
