@@ -151,8 +151,9 @@ void Plot_CDet_PulseStudy(
   const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
   const bool applyToTCut = ApplyToTCut != 0;
   const bool useEllipse = EllipseRadius > 0.0;
-  // ECalMinT/ECalMaxT are bounds on earm.ecal.adctime in ns for your event boolean.
-  // They do not change the stored pulse.ecal_eligible or pulse.spatial_pass flags.
+  // Reject events outside the configured ECal ADC-time window before the hit loop.
+  // The per-pulse replay eligibility flag still supplies its cluster/position checks.
+  // Optional tighter ADC-time cuts belong to the secondary plotting routines.
   // Display ranges and fit bounds in the config are NOT selection cuts.
 
   if (RunNumber <= 0 || nevents < -1 || minSeg < -1 || maxSeg < -1 ||
@@ -214,6 +215,8 @@ void Plot_CDet_PulseStudy(
   TTreeReaderArray<double> PulseXResiduals(reader, "earm.cdet.pulse.ecal_x_residual");
   TTreeReaderArray<double> PulseYResiduals(reader, "earm.cdet.pulse.ecal_y_residual");
   TTreeReaderArray<double> PulseDt(reader, "earm.cdet.pulse.ecal_residual");
+  TTreeReaderArray<double> PulseECalEligible(reader, "earm.cdet.pulse.ecal_eligible");
+  TTreeReaderArray<double> PulseSpatialPass(reader, "earm.cdet.pulse.spatial_pass");
 
   vECalE.reserve(limit);
   vECalAdcTime.reserve(limit);
@@ -237,12 +240,11 @@ void Plot_CDet_PulseStudy(
   std::cout << "[CDet pulse study] Run " << RunNumber << ": reading " << limit << " events.\n"
             << "  Configuration: " << configFile << '\n'
             << "  ECal energy: " << ECalMinE << " < E < " << ECalMaxE << " GeV\n"
-            << "  ECal ADC time: " << ECalMinT << " < t < " << ECalMaxT << " ns\n"
+            << "  ECal ADC time: " << ECalMinT << " < t < " << ECalMaxT << " ns (before hit loop).\n"
             << "  LE: " << LeMin << " <= LE <= " << LeMax << " ns\n"
-            << "  ToT window: " << (applyToTCut ? "on" : "off")
-            << " (" << TotMin << ".." << TotMax << " ns).\n"
+            << "  Loading ToT window: " << TotMin << " < ToT < " << TotMax << " ns.\n"
             << "  Ellipse radius: " << EllipseRadius << " (-1 = off).\n"
-            << "  ECal energy/time cuts applied; CDet hit cuts are still a placeholder.\n";
+            << "  Loading requires ECal energy/time, replay eligibility/spatial/calibration flags, and ToT.\n";
 
   // 4. ONE EVENT LOOP. Save values here; do histogram filling later.
   Long64_t EventCounter = 0;
@@ -276,7 +278,11 @@ void Plot_CDet_PulseStudy(
 
     for (size_t hit = 0; hit < PulseID.GetSize(); ++hit) {
       // ADD YOUR CDET HIT-CUT BOOLEANS HERE, then combine them in good_hit.
-      const bool good_hit = true; // Placeholder: currently keep every pulse.
+      bool good_ecal_eligible = PulseECalEligible[hit] > 0.5;
+      bool good_spatial_pass = PulseSpatialPass[hit] > 0.5;
+      bool good_calibration = PulseGoodCalib[hit] > 0.5;
+      bool good_pulse_tot = std::isfinite(PulseToT[hit]) && PulseToT[hit] > TotMin && PulseToT[hit] < TotMax;
+      const bool good_hit = good_ecal_eligible && good_spatial_pass && good_calibration && good_pulse_tot;
       if (!good_hit) continue;
 
       // Copy all fields for the SAME passing pulse; convert raw LE to ns.
@@ -365,7 +371,7 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const bool applyToTCut = config.GetValue("pulse_pixel_timing.apply_tot_cut", 0) != 0;
-  // Loading already applied analysis.ecal_*; these optional cuts only narrow saved events.
+  // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
   const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
@@ -578,7 +584,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const bool applyToTCut = config.GetValue("pulse_pixel_timing.apply_tot_cut", 0) != 0;
-  // Loading already applied analysis.ecal_*; these optional cuts only narrow saved events.
+  // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
   const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
