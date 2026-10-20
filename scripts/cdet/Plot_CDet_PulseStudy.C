@@ -58,6 +58,7 @@ TH2D* hPulseSummaryBarLeVsToT[2] = {};
 TH2D* hPulseSummaryPixelLeVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseBarDtVsRx[2] = {nullptr, nullptr};
 TH2D* hPulsePixelDtVsRx[2][pixelsPerBar] = {};
+TH2D* hPulseBarDt_resVsRx = nullptr;
 
 //-------ECal Vectors ---------
 std::vector<double> vECalE;
@@ -693,6 +694,8 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   }
 
   // Replace only this routine's previous canvases, including when the bars change.
+  delete gROOT->GetListOfCanvases()->FindObject("cControlBar");
+  delete hPulseBarDt_resVsRx;
   for (int selected = 0; selected < 2; ++selected) {
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%s", roles[selected]));
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sBarDt", roles[selected]));
@@ -716,6 +719,8 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   }
 
   // Define all histograms before filling. Display limits are not additional cuts.
+  hPulseBarDt_resVsRx = new TH2D("hPulseBarDt_resVsRx", TString::Format("Control bar %d: branch dt versus rx;rx (m);Stored pulse.ecal_residual (ns);Pulses", controlBar), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
+  hPulseBarDt_resVsRx->SetDirectory(nullptr);
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
     hPulseSummaryBarDt[selected] = new TH1D(TString::Format("hPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: branch dt, all pixels;Stored pulse.ecal_residual (ns);Pulses", roles[selected], bar), nDtBins, DtMin, DtMax);
@@ -790,11 +795,18 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         hPulseSummaryPixelLeVsToT[selected][pixel]->Fill(totNs, le);
         hPulseBarDtVsRx[selected]->Fill(rx, dt_manual);
         hPulsePixelDtVsRx[selected][pixel]->Fill(rx, dt_manual);
+        if (selected == 1) hPulseBarDt_resVsRx->Fill(rx,dt);
       }
       ++filledPulses;
     }
   }
-
+  TCanvas* cBarDt_resVsRx = new TCanvas("cControlBar", TString::Format("Control bar %d: branch dt versus rx", controlBar), 900, 650);
+  hPulseBarDt_resVsRx->SetStats(false);
+  gPad->SetRightMargin(0.15);
+  hPulseBarDt_resVsRx->Draw("COLZ");
+  cBarDt_resVsRx->Modified();
+  cBarDt_resVsRx->Update();
+  cBarDt_resVsRx->SaveAs(TString::Format("%s/bar%03d_%s_dtResVsRx.pdf", outputDirectory.Data(), bars[1], roles[1]));
   // Eight independent canvases per bar; each pixel canvas keeps its 4x4 grid.
   for (int selected = 0; selected < 2; ++selected) {
     TCanvas* cBarDt = new TCanvas(TString::Format("cPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: summed branch dt", roles[selected], bars[selected]), 900, 650);
@@ -870,7 +882,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     cPixelDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt_manual_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
   }
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
-            << "; selected " << filledPulses << " pulses. Sixteen canvases remain open.\n"
+            << "; selected " << filledPulses << " pulses. Seventeen canvases remain open.\n"
             << "  dt uses vPulseDt; LE versus ToT uses uncorrected vPulseLe. All times are in ns.\n"
             << "  dt versus rx uses ECal ADC time - vPulseLe against stored x residual.\n"
             << "  PDF output: " << outputDirectory << '\n';
