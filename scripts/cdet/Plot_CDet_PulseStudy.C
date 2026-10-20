@@ -8,6 +8,8 @@
 // Saves four PDFs per bar under PusleStudy/<tag>/ without opening plot windows.
 // Interactive study/control plots (eight visible canvases per bar):
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "first_pass");
+// Position/rx overlays (one visible canvas per bar):
+//   plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "positions", 19, 30);
 // Shares CDet_run<run>_pulse_pixel_timing.conf with the pulse-timing macro.
 // Cut arguments override that file for this call only; NAN means use the file.
 // Loading always applies TotMin/TotMax. The secondary plotting ToT switch is
@@ -19,6 +21,7 @@
 #include <TEnv.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TLegend.h>
 #include <TList.h>
 #include <TROOT.h>
 #include <TPad.h>
@@ -58,7 +61,9 @@ TH2D* hPulseSummaryBarLeVsToT[2] = {};
 TH2D* hPulseSummaryPixelLeVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseBarDtVsRx[2] = {nullptr, nullptr};
 TH2D* hPulsePixelDtVsRx[2][pixelsPerBar] = {};
-TH2D* hPulseBarDt_resVsRx = nullptr;
+// Separate position-overlay histograms: index 0 = study bar, 1 = control bar.
+TH1D* hPulsePositionBarX[2] = {};
+TH1D* hPulsePositionBarRx[2] = {};
 
 //-------ECal Vectors ---------
 std::vector<double> vECalE;
@@ -588,7 +593,7 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
 // 6. Interactive plots for the study/control bars: one spectrum or 4x4 grid per canvas.
 // The optional ellipse uses branch dt; otherwise the configured x-residual cut applies.
 // dt uses vPulseDt. Raw LE is already saved in ns and has no extra timing corrections.
-// The dt-versus-rx diagnostic instead uses ECal ADC time minus raw LE.
+// Every dt plot uses the stored pulse.ecal_residual branch, including dt versus rx.
 // Leaves canvases open and does not change ROOT's batch setting. Use an interactive session.
 void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                         const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
@@ -695,7 +700,6 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
 
   // Replace only this routine's previous canvases, including when the bars change.
   delete gROOT->GetListOfCanvases()->FindObject("cControlBar");
-  delete hPulseBarDt_resVsRx;
   for (int selected = 0; selected < 2; ++selected) {
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%s", roles[selected]));
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sBarDt", roles[selected]));
@@ -719,8 +723,6 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   }
 
   // Define all histograms before filling. Display limits are not additional cuts.
-  hPulseBarDt_resVsRx = new TH2D("hPulseBarDt_resVsRx", TString::Format("Control bar %d: branch dt versus rx;rx (m);Stored pulse.ecal_residual (ns);Pulses", controlBar), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
-  hPulseBarDt_resVsRx->SetDirectory(nullptr);
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
     hPulseSummaryBarDt[selected] = new TH1D(TString::Format("hPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: branch dt, all pixels;Stored pulse.ecal_residual (ns);Pulses", roles[selected], bar), nDtBins, DtMin, DtMax);
@@ -729,7 +731,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     hPulseSummaryBarLe[selected]->SetDirectory(nullptr);
     hPulseSummaryBarLeVsToT[selected] = new TH2D(TString::Format("hPulseSummary%sBarLeVsToT", roles[selected]), TString::Format("%s bar %d: raw LE versus ToT, all pixels;ToT (ns);Raw CDet LE (ns);Pulses", roles[selected], bar), nTotBins, TotDisplayMin, TotDisplayMax, nLeBins, LeDisplayMin, LeDisplayMax);
     hPulseSummaryBarLeVsToT[selected]->SetDirectory(nullptr);
-    hPulseBarDtVsRx[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: manual dt versus rx, all pixels;rx (m);t_{ECal,ADC} - t_{CDet,raw} (ns);Pulses", roles[selected], bar), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
+    hPulseBarDtVsRx[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: branch dt versus rx, all pixels;rx (m);Stored pulse.ecal_residual (ns);Pulses", roles[selected], bar), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
     hPulseBarDtVsRx[selected]->SetDirectory(nullptr);
     for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
       const int id = bar * pixelsPerBar + pixel;
@@ -739,7 +741,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       hPulseSummaryPixelLe[selected][pixel]->SetDirectory(nullptr);
       hPulseSummaryPixelLeVsToT[selected][pixel] = new TH2D(TString::Format("hPulseSummary%sPixel%dLeVsToT", roles[selected], pixel), TString::Format("Pixel %d (ID %d): raw LE versus ToT;ToT (ns);Raw CDet LE (ns);Pulses", pixel, id), nTotBins, TotDisplayMin, TotDisplayMax, nLeBins, LeDisplayMin, LeDisplayMax);
       hPulseSummaryPixelLeVsToT[selected][pixel]->SetDirectory(nullptr);
-      hPulsePixelDtVsRx[selected][pixel] = new TH2D(TString::Format("hPulseSummary%sPixel%dDtVsRx", roles[selected], pixel), TString::Format("Pixel %d (ID %d): manual dt versus rx;rx (m);t_{ECal,ADC} - t_{CDet,raw} (ns);Pulses", pixel, id), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
+      hPulsePixelDtVsRx[selected][pixel] = new TH2D(TString::Format("hPulseSummary%sPixel%dDtVsRx", roles[selected], pixel), TString::Format("Pixel %d (ID %d): branch dt versus rx;rx (m);Stored pulse.ecal_residual (ns);Pulses", pixel, id), 100, -xRes, xRes, nDtBins, DtMin, DtMax);
       hPulsePixelDtVsRx[selected][pixel]->SetDirectory(nullptr);
     }
   }
@@ -751,7 +753,6 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
-    double t_ECal = vECalAdcTime[event];
     if (!good_ECal_energy || !good_ECal_time) continue;
     for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
       const double id = vPulseID[event][hit];
@@ -766,7 +767,6 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       const double le = vPulseLe[event][hit];
       const double totNs = vPulseToT[event][hit];
       const double rx = vPulseXResiduals[event][hit];
-      const double dt_manual = t_ECal - le;
       const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
       const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
           (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
@@ -793,20 +793,12 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         hPulseSummaryPixelLe[selected][pixel]->Fill(le);
         hPulseSummaryBarLeVsToT[selected]->Fill(totNs, le);
         hPulseSummaryPixelLeVsToT[selected][pixel]->Fill(totNs, le);
-        hPulseBarDtVsRx[selected]->Fill(rx, dt_manual);
-        hPulsePixelDtVsRx[selected][pixel]->Fill(rx, dt_manual);
-        if (selected == 1) hPulseBarDt_resVsRx->Fill(rx,dt);
+        hPulseBarDtVsRx[selected]->Fill(rx, dt);
+        hPulsePixelDtVsRx[selected][pixel]->Fill(rx, dt);
       }
       ++filledPulses;
     }
   }
-  TCanvas* cBarDt_resVsRx = new TCanvas("cControlBar", TString::Format("Control bar %d: branch dt versus rx", controlBar), 900, 650);
-  hPulseBarDt_resVsRx->SetStats(false);
-  gPad->SetRightMargin(0.15);
-  hPulseBarDt_resVsRx->Draw("COLZ");
-  cBarDt_resVsRx->Modified();
-  cBarDt_resVsRx->Update();
-  cBarDt_resVsRx->SaveAs(TString::Format("%s/bar%03d_%s_dtResVsRx.pdf", outputDirectory.Data(), bars[1], roles[1]));
   // Eight independent canvases per bar; each pixel canvas keeps its 4x4 grid.
   for (int selected = 0; selected < 2; ++selected) {
     TCanvas* cBarDt = new TCanvas(TString::Format("cPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: summed branch dt", roles[selected], bars[selected]), 900, 650);
@@ -861,15 +853,15 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     cPixelLeVsToT->Update();
     cPixelLeVsToT->SaveAs(TString::Format("%s/bar%03d_%s_pixels_le_vs_tot.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
-    TCanvas* cBarDtVsRx = new TCanvas(TString::Format("cPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: summed manual dt versus rx", roles[selected], bars[selected]), 900, 650);
+    TCanvas* cBarDtVsRx = new TCanvas(TString::Format("cPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: summed branch dt versus rx", roles[selected], bars[selected]), 900, 650);
     hPulseBarDtVsRx[selected]->SetStats(false);
     gPad->SetRightMargin(0.15);
     hPulseBarDtVsRx[selected]->Draw("COLZ");
     cBarDtVsRx->Modified();
     cBarDtVsRx->Update();
-    cBarDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_dt_manual_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
+    cBarDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_dt_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
-    TCanvas* cPixelDtVsRx = new TCanvas(TString::Format("cPulseSummary%sPixelDtVsRx", roles[selected]), TString::Format("%s bar %d: pixel manual dt versus rx", roles[selected], bars[selected]), 1400, 1000);
+    TCanvas* cPixelDtVsRx = new TCanvas(TString::Format("cPulseSummary%sPixelDtVsRx", roles[selected]), TString::Format("%s bar %d: pixel branch dt versus rx", roles[selected], bars[selected]), 1400, 1000);
     cPixelDtVsRx->Divide(4, 4);
     for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
       cPixelDtVsRx->cd(pixel + 1);
@@ -879,11 +871,191 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
     cPixelDtVsRx->Modified();
     cPixelDtVsRx->Update();
-    cPixelDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt_manual_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
+    cPixelDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
   }
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
-            << "; selected " << filledPulses << " pulses. Seventeen canvases remain open.\n"
+            << "; selected " << filledPulses << " pulses. Sixteen canvases remain open.\n"
             << "  dt uses vPulseDt; LE versus ToT uses uncorrected vPulseLe. All times are in ns.\n"
-            << "  dt versus rx uses ECal ADC time - vPulseLe against stored x residual.\n"
+            << "  dt versus rx uses vPulseDt against stored x residual.\n"
+            << "  PDF output: " << outputDirectory << '\n';
+}
+
+// 7. Interactive x/rx overlays for the study/control bars, with the same cuts as
+// plotPulseStudyBars. UseCorrectedX: -1 reads config, 0 channel x, 1 aligned x.
+// Both histograms contain the same pulses; display bounds do not select pulses.
+void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
+                            const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
+                            double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN,
+                            int UseCorrectedX = -1)
+{
+  TEnv config;
+  if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
+      config.GetValue("config.version", 0) != 1) {
+    std::cerr << "[CDet pulse positions] Cannot read configuration with config.version: 1.\n";
+    return;
+  }
+  if (studyBar == -1) studyBar = config.GetValue("pulse_pixel_timing.study_bar", 19);
+  if (controlBar == -1) controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
+  if (std::isnan(PositionBinWidth)) PositionBinWidth = config.GetValue("pulse_study.position_bin_width_m", 0.005);
+  if (std::isnan(PositionMin)) PositionMin = config.GetValue("pulse_study.position_min_m", -1.6);
+  if (std::isnan(PositionMax)) PositionMax = config.GetValue("pulse_study.position_max_m", 1.6);
+  if (UseCorrectedX == -1) UseCorrectedX = config.GetValue("pulse_study.position_use_corrected_x", 1);
+  const double LeMin = config.GetValue("analysis.le_min", 0.02);
+  const double LeMax = config.GetValue("analysis.le_max", 60.0);
+  const double TotMin = config.GetValue("analysis.tot_min", 4.0);
+  const double TotMax = config.GetValue("analysis.tot_max", 30.0);
+  const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
+  const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
+  const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
+  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
+  const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
+  const double ellipseXCenter = config.GetValue("good_pulse.single_residual_center_m", 0.0);
+  const double ellipseTimeCenter = config.GetValue("good_pulse.single_timing_center_ns", -26.0);
+  const double ellipseXScale = config.GetValue("good_pulse.single_residual_scale_m", 0.040);
+  const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
+  const bool useEllipse = ellipseRadius > 0.0;
+
+  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
+      (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
+      !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
+      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0 || TotMin >= TotMax))) {
+    std::cerr << "[CDet pulse positions] Invalid configured ECal, LE, or ToT cuts.\n";
+    return;
+  }
+  if (!std::isfinite(ellipseRadius) || (!useEllipse && ellipseRadius != -1.0) ||
+      (useEllipse && (!std::isfinite(ellipseXCenter) || !std::isfinite(ellipseTimeCenter) ||
+       !std::isfinite(ellipseXScale) || !std::isfinite(ellipseTimeScale) ||
+       ellipseXScale <= 0.0 || ellipseTimeScale <= 0.0))) {
+    std::cerr << "[CDet pulse positions] Invalid ellipse settings; radius -1 disables it.\n";
+    return;
+  }
+  if (studyBar < 0 || studyBar >= numBars || controlBar < 0 || controlBar >= numBars ||
+      (UseCorrectedX != 0 && UseCorrectedX != 1) ||
+      !std::isfinite(PositionBinWidth) || PositionBinWidth <= 0 ||
+      !std::isfinite(PositionMin) || !std::isfinite(PositionMax) || PositionMin >= PositionMax ||
+      !std::isfinite((PositionMax - PositionMin) / PositionBinWidth) ||
+      std::ceil((PositionMax - PositionMin) / PositionBinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse positions] Invalid bar IDs, x-source switch, or position display settings.\n";
+    return;
+  }
+  if (vPulseID.empty()) {
+    std::cerr << "[CDet pulse positions] No saved pulse events; run the main macro first.\n";
+    return;
+  }
+  const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
+  const int bars[2] = {studyBar, controlBar};
+  const char* roles[2] = {"Study", "Control"};
+  const char* xLabel = UseCorrectedX ? "Aligned CDet x (pulse.x_corr)" : "Channel CDet x (pulse.x)";
+  TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
+  if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
+  const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (int i = 0; i < tag.Length(); ++i) {
+    if (allowedTagCharacters.First(tag[i]) == kNPOS) {
+      std::cerr << "[CDet pulse positions] Output tag may contain only letters, numbers, underscores, and hyphens.\n";
+      return;
+    }
+  }
+  const TString outputDirectory = TString::Format("%s/PusleStudy/%s", gSystem->WorkingDirectory(), tag.Data());
+  if (gSystem->AccessPathName(outputDirectory)) gSystem->mkdir(outputDirectory, true);
+  FileStat_t outputInfo;
+  if (gSystem->GetPathInfo(outputDirectory, outputInfo) != 0 || !R_ISDIR(outputInfo.fMode) ||
+      gSystem->AccessPathName(outputDirectory, kWritePermission)) {
+    std::cerr << "[CDet pulse positions] Cannot write output directory: " << outputDirectory << '\n';
+    return;
+  }
+
+  // Replace this routine's own canvases/histograms before defining new ones.
+  for (int selected = 0; selected < 2; ++selected) {
+    delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulsePosition%s", roles[selected]));
+    delete hPulsePositionBarX[selected];
+    delete hPulsePositionBarRx[selected];
+  }
+
+  // Define all histograms before the event/hit loop, using shared position axes.
+  for (int selected = 0; selected < 2; ++selected) {
+    hPulsePositionBarX[selected] = new TH1D(TString::Format("hPulsePosition%sX", roles[selected]), TString::Format("%s bar %d: %s and rx;Position / residual (m);Pulses", roles[selected], bars[selected], UseCorrectedX ? "aligned x" : "channel x"), nPositionBins, PositionMin, PositionMax);
+    hPulsePositionBarRx[selected] = new TH1D(TString::Format("hPulsePosition%sRx", roles[selected]), TString::Format("%s bar %d: stored rx;Position / residual (m);Pulses", roles[selected], bars[selected]), nPositionBins, PositionMin, PositionMax);
+    hPulsePositionBarX[selected]->SetDirectory(nullptr);
+    hPulsePositionBarRx[selected]->SetDirectory(nullptr);
+  }
+
+  // One pass through the aligned saved vectors. dt is already in ns.
+  Long64_t filledPulses = 0;
+  for (size_t event = 0; event < vPulseID.size(); ++event) {
+    const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
+    const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
+        (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
+    if (!good_ECal_energy || !good_ECal_time) continue;
+    for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
+      const double id = vPulseID[event][hit];
+      const double dt = vPulseDt[event][hit];
+      if (!std::isfinite(id) || id < 0 || id >= numBars * pixelsPerBar ||
+          std::floor(id) != id || !std::isfinite(dt)) continue;
+      const int bar = int(id) / pixelsPerBar;
+
+      if (bar != studyBar && bar != controlBar) continue;
+      // All saved timing vectors used here are in ns.
+      const double le = vPulseLe[event][hit];
+      const double totNs = vPulseToT[event][hit];
+      const double rx = vPulseXResiduals[event][hit];
+      const double x = UseCorrectedX ? vPulseXCorr[event][hit] : vPulseX[event][hit];
+      const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
+      const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
+          (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
+      const bool good_x_res = std::isfinite(rx) && std::abs(rx) <= xRes;
+
+      bool good_ellipse = true;
+      if (useEllipse) {
+        // Select once using the branch dt, so both plots contain identical pulses.
+        const double normalizedX = (rx - ellipseXCenter) / ellipseXScale;
+        const double normalizedTime = (dt - ellipseTimeCenter) / ellipseTimeScale;
+        good_ellipse = std::isfinite(rx) &&
+            normalizedX * normalizedX + normalizedTime * normalizedTime <= ellipseRadius * ellipseRadius;
+      }
+      else {
+        // If the ellipse is not used, still apply the x residual cut.
+        good_ellipse = good_x_res;
+      }
+      if (!good_le || !good_tot || !good_ellipse || !std::isfinite(x)) continue;
+      for (int selected = 0; selected < 2; ++selected) {
+        if (bar != bars[selected]) continue;
+        hPulsePositionBarX[selected]->Fill(x);
+        hPulsePositionBarRx[selected]->Fill(rx);
+      }
+      ++filledPulses;
+    }
+  }
+  // Draw one overlay per bar after filling; retain canvases in the caller's mode.
+  for (int selected = 0; selected < 2; ++selected) {
+    TCanvas* canvas = new TCanvas(TString::Format("cPulsePosition%s", roles[selected]), TString::Format("%s bar %d: x and rx", roles[selected], bars[selected]), 1000, 650);
+    hPulsePositionBarX[selected]->SetStats(false);
+    hPulsePositionBarRx[selected]->SetStats(false);
+    hPulsePositionBarX[selected]->SetLineColor(kBlue + 1);
+    hPulsePositionBarRx[selected]->SetLineColor(kRed + 1);
+    hPulsePositionBarX[selected]->SetLineWidth(2);
+    hPulsePositionBarRx[selected]->SetLineWidth(2);
+    hPulsePositionBarX[selected]->SetMinimum(0.0);
+    hPulsePositionBarX[selected]->SetMaximum(1.35 * std::max(1.0, std::max(hPulsePositionBarX[selected]->GetMaximum(), hPulsePositionBarRx[selected]->GetMaximum())));
+    hPulsePositionBarX[selected]->Draw("HIST");
+    hPulsePositionBarRx[selected]->Draw("HIST SAME");
+    TLegend* legend = new TLegend(0.52, 0.76, 0.89, 0.89);
+    legend->AddEntry(hPulsePositionBarX[selected], xLabel, "l");
+    legend->AddEntry(hPulsePositionBarRx[selected], "rx (pulse.ecal_x_residual)", "l");
+    legend->Draw();
+    legend->SetBit(TObject::kCanDelete);
+    canvas->Modified();
+    canvas->Update();
+    canvas->SaveAs(TString::Format("%s/bar%03d_%s_x_and_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
+  }
+  std::cout << "[CDet pulse positions] Drew study bar " << studyBar << " and control bar " << controlBar
+            << "; selected " << filledPulses << " pulses. Two position canvases remain open.\n"
+            << "  Blue: " << xLabel << "; red: stored rx. Positions are in metres.\n"
+            << "  Values outside the display bounds remain in underflow/overflow bins.\n"
             << "  PDF output: " << outputDirectory << '\n';
 }

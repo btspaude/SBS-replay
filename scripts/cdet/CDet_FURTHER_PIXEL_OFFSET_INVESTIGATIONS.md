@@ -47,7 +47,7 @@ illumination leaves many bars poorly covered. These motivate the investigation;
 they are not yet a quantified signal/background or coverage result here.
 
 Start with study bar 19 and control bar 30. Inspect whole-bar and 4×4 pixel
-distributions of manual dt versus rx without an ellipse centered at −26 ns.
+distributions of stored `pulse.ecal_residual` versus rx without an ellipse centered at −26 ns.
 The aim is to find localized structure before choosing a timing center.
 Different pixel offsets could smear a whole-bar distribution, making the
 per-pixel views especially useful. Localization alone does not establish signal.
@@ -61,12 +61,12 @@ vectors once; `plotPulseStudyBars` draws from those vectors.
 | Quantity | Source and convention |
 | --- | --- |
 | Stored rx | `vPulseXResiduals`, from `earm.cdet.pulse.ecal_x_residual`, in metres |
-| Manual dt | `vECalAdcTime[event] - vPulseLe[event][hit]`, in ns |
 | Stored dt | `vPulseDt`, from `earm.cdet.pulse.ecal_residual`, in ns |
 
-`vPulseLe` receives the 0.01 conversion to ns during loading. Manual dt omits
-the additional pulse timing corrections; it is not a subtraction of untouched
-hardware counts. Stored rx uses aligned channel geometry and projected ECal x,
+`vPulseLe` receives the 0.01 conversion to ns during loading and remains the
+source for raw-LE and LE-versus-ToT plots. Every dt histogram now uses
+`vPulseDt`; no manual ECal-minus-raw-LE calculation is used. Stored rx uses
+aligned channel geometry and projected ECal x,
 not pulse timing. With the current database's spatial settings:
 
 ```text
@@ -76,17 +76,20 @@ rx = x_corr - projected_ECal_x - 0.0 m
 
 The settings actually used to replay a ROOT file determine its stored values.
 
-The study/control routine currently produces eight canvases per bar:
-summed and 4×4 pixel views of stored dt, raw LE, raw LE versus ToT, and manual
-dt versus rx. It additionally draws one **stored-dt-versus-rx** canvas for the
-configured control bar, for **17 canvases total**. That extra histogram is
-`hPulseBarDt_resVsRx`; the user's `selected == 1` fill follows the control bar
-argument/configuration, rather than being permanently fixed to bar 30.
+The study/control routine produces eight canvases per bar: summed and 4×4
+pixel views of stored dt, raw LE, raw LE versus ToT, and stored dt versus rx.
+There are **16 canvases total**; the control bar uses the same dt-versus-rx
+histogram path as the study bar. Both bar IDs remain configurable. The dt/rx
+plots save as `barNNN_Role_dt_vs_rx.pdf` and `barNNN_Role_pixels_dt_vs_rx.pdf`.
 
-The control histogram has been initialized with the existing 100 rx bins
-over `[-xRes, +xRes]` and shared dt binning. Its canvas uses `COLZ` and saves as
-`bar030_Control_dtResVsRx.pdf` with the default control bar. Repeated calls
-replace the histogram/canvas. The missing `SaveAs` semicolon was also fixed.
+A separate `plotPulseStudyPositions` routine draws **two additional canvases**,
+one per configured bar, overlaying CDet x (blue) and stored rx (red) in metres.
+The default x source is aligned `vPulseXCorr`; set
+`pulse_study.position_use_corrected_x: 0` for original channel `vPulseX`.
+The routine uses the same plotting cuts as `plotPulseStudyBars`. The position
+bin width and bounds are controlled by `pulse_study.position_bin_width_m`,
+`pulse_study.position_min_m`, and `pulse_study.position_max_m`, with explicit
+routine arguments available. These axis limits do not cut pulses.
 
 Example, from the CDet script directory with `OUT_DIR` set:
 
@@ -94,6 +97,7 @@ Example, from the CDet script directory with `OUT_DIR` set:
 .L Plot_CDet_PulseStudy.C+
 Plot_CDet_PulseStudy("CDet_run6077_pulse_pixel_timing.conf");
 plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "offset_investigation", 19, 30);
+plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "offset_investigation", 19, 30);
 ```
 
 Outputs go to `PusleStudy/<tag>/`. The current dt display range is −90 to 0 ns;
@@ -111,7 +115,7 @@ LE/ToT selection and any enabled secondary ECal cuts.
 In the two-bar routine, disabling the ellipse activates the standalone rx
 cut. Its threshold still reads `analysis.x_difference_max`; the separately
 present `analysis.x_res_max` key is unused. This naming mismatch remains to
-be resolved. The current manual and stored dt-versus-rx histograms are filled
+be resolved. The dt-versus-rx histograms and x/rx overlays are filled
 after the shared plotting selection. Enabling the ellipse therefore selects
 them using **stored dt**; they are not independent before/after-cut panels.
 
@@ -139,11 +143,13 @@ and does not prove hardware failure; noise also counts as activity.
 
 ## Validation and next checks
 
-ROOT compilation and synthetic-data checks passed for the new control
-stored-dt-versus-rx histogram, its separation from manual dt, pixel sums,
-redraw cleanup, and changed study/control bars. These are implementation checks,
-not evidence that a physics peak has been isolated. Scratch test log:
-`/private/tmp/cdet_pulse_dt_rx_residual/check.log`.
+ROOT compilation and synthetic-data checks passed for stored dt in the batch,
+bar, and pixel histograms; the secondary ECal and ToT cut switches; ellipse
+selection; aligned/original x selection; axis flow bins; and repeated calls
+with changed bars and coexisting canvases. A 1,000-event run-6077 sample also
+produced both position overlays. These are implementation checks, not evidence
+that a physics peak has been isolated. Scratch test log:
+`/private/tmp/cdet_pulse_position/check.log`.
 
 Next, inspect the LH2 bar-19/control-bar plots and pixel grids for localization,
 and compare the full activity scan with the Run 5710 unavailable-offset list.
