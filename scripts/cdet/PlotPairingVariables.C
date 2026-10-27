@@ -46,11 +46,13 @@
 // final selectedLayer1Pixel is a zero-based Layer-1 pixel ID (-1 keeps the
 // legacy whole-bar selection).
 // -1 disables either additional pair cut. Default selects stored pairs as-is.
-// One event pass produces all eight canvases, including focused/all-detector
+// One event pass produces the canvases, including focused/all-detector
 // geometry and the all-bar scan. The upper row is the existing all-pair
 // population; the lower row contains one best pair per event. savePlots
-// defaults to false. When true, save all eight as PNG AND PDF plus
+// defaults to false. When true, save the canvases as PNG AND PDF plus
 // the per-bar CSV, under outputDirectory with run/bar-specific file names.
+// A separate pre-ellipse dt-versus-rx canvas contains all 16 L1 pixels in
+// focusedBar (bar 30 by default), even when the other focused plots select a pixel.
 // These tighten the STORED pair population; they do not rerun assignment.
 // The best-pair row chooses the accepted pair with the smallest
 // pair.ecal_score in each event (falling back to the explicitly recomputed
@@ -262,6 +264,10 @@ void PlotPairingVariables(int runNumber = 6077,
   TH2D hPairEllipseBest("hPairEllipseBest_"+tag,
       allTitle+";r_{x} (m);#Delta t_{pair} = t_{ECal} - <t_{CDet}>_{pair} (ns)",
       160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
+  const TString barEllipseTitle = TString::Format("Run %d, L1 bar %d: pre-ellipse pairs", runNumber, focusedBar);
+  TH2D hBarPairEllipseBefore("hBarPairEllipseBefore_"+tag, barEllipseTitle+";r_{x,pair} (m);t_{ECal} - <t_{CDet}>_{pair} (ns);Pairs", 160, -0.16, 0.16, nECalDT, ecalDTMinNs, ecalDTMaxNs);
+  hBarPairEllipseBefore.SetDirectory(nullptr);
+  hBarPairEllipseBefore.SetStats(false);
   hPairXDiffVsX1.SetDirectory(nullptr);
   hPairXDiffVsX1.SetStats(false);
   hBestPairXDiffVsX1.SetDirectory(nullptr);
@@ -381,6 +387,9 @@ void PlotPairingVariables(int runNumber = 6077,
           memberToTMinNs, memberToTMaxNs, layerDTMaxNs, -1);
       if (passesPreEllipse) {
         hPairEllipseBefore.Fill(pairTrajectoryResidual[pair], pairECalDT[pair]);
+        // Keep all pixels in the focused L1 bar and their actual L2 partners.
+        if (id1 / 16 == static_cast<size_t>(focusedBar))
+          hBarPairEllipseBefore.Fill(pairTrajectoryResidual[pair], pairECalDT[pair]);
         const double radiusSquared = PairEllipseRadiusSquared(
             pairTrajectoryResidual[pair], pairECalDT[pair]);
         const double rank = std::isfinite(pairECalScore[pair])
@@ -724,6 +733,35 @@ void PlotPairingVariables(int runNumber = 6077,
   if (savePlots) {
     ellipseCanvas->SaveAs(outputPrefix+"_ellipse.pdf");
     ellipseCanvas->SaveAs(outputPrefix+"_ellipse.png");
+  }
+
+  // Same pre-ellipse population and axes, restricted to the focused L1 bar.
+  auto *barEllipseCanvas = new TCanvas("cBarPairEllipse_"+tag, barEllipseTitle, 900, 650);
+  barEllipseCanvas->SetRightMargin(0.15);
+  barEllipseCanvas->SetTopMargin(0.20);
+  hBarPairEllipseBefore.DrawCopy("COLZ");
+  if (pairRadiusMax > 0) {
+    TEllipse ellipse(0.0, CDetPairingPlots::kPairEllipseTimingCenterNs,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTrajectoryScaleM,
+        pairRadiusMax * CDetPairingPlots::kPairEllipseTimingScaleNs);
+    ellipse.SetFillStyle(0);
+    ellipse.SetLineColor(kRed+1);
+    ellipse.SetLineWidth(3);
+    ellipse.DrawClone("SAME");
+  }
+  auto *barCuts = new TPaveText(0.12, 0.81, 0.85, 0.91, "NDC");
+  barCuts->SetFillColor(0);
+  barCuts->SetBorderSize(0);
+  barCuts->SetTextSize(0.020);
+  barCuts->AddText(CutLabel(memberToTMinNs, memberToTMaxNs, layerDTMaxNs, -1));
+  barCuts->AddText(eventCuts);
+  barCuts->SetBit(TObject::kCanDelete);
+  barCuts->Draw();
+  barEllipseCanvas->Modified();
+  barEllipseCanvas->Update();
+  if (savePlots) {
+    barEllipseCanvas->SaveAs(outputPrefix+"_bar_dt_vs_rx.pdf");
+    barEllipseCanvas->SaveAs(outputPrefix+"_bar_dt_vs_rx.png");
   }
 
   // 12. Third canvas: sigma versus bar number within each detector layer.
