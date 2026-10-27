@@ -10,6 +10,8 @@
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "first_pass");
 // Position/rx overlays (one visible canvas per bar):
 //   plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "positions", 19, 30);
+// Background plots, including matched rx canvases for multiple/single pulses in bar 30:
+//   plotPulseStudyBackground("CDet_run6077_pulse_pixel_timing.conf", "multiplicity", 19, 30);
 // Shares CDet_run<run>_pulse_pixel_timing.conf with the pulse-timing macro.
 // Cut arguments override that file for this call only; NAN means use the file.
 // Loading always applies TotMin/TotMax. The secondary plotting ToT switch is
@@ -21,6 +23,7 @@
 #include <TEnv.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TLatex.h>
 #include <TLegend.h>
 #include <TList.h>
 #include <TROOT.h>
@@ -64,6 +67,11 @@ TH2D* hPulsePixelDtVsRx[2][pixelsPerBar] = {};
 // Separate position-overlay histograms: index 0 = study bar, 1 = control bar.
 TH1D* hPulsePositionBarX[2] = {};
 TH1D* hPulsePositionBarRx[2] = {};
+// Multiplicity is counted per event in the background routine's selected bar.
+TH1D* hPulseBackgroundRxMultiple = nullptr;
+TH1D* hPulseBackgroundRxSingle = nullptr;
+TH2D* hPulseBackgroundDtVsRxMultiple = nullptr;
+TH2D* hPulseBackgroundDtVsRxSingle = nullptr;
 
 //-------ECal Vectors ---------
 std::vector<double> vECalE;
@@ -1061,9 +1069,12 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
 }
 
 
-// 8. Background-study outline. Uses the saved vectors; run the main macro first.
-// Add your selection expressions, histograms, fills, and canvases below.
+// 8. Background study. Uses the saved vectors; run the main macro first.
 // ECal time is filled once per event passing the energy/time selections below.
+// The selected bar is controlBar (fourth argument, default from the config).
+// The rx and dt-versus-rx distributions split events AFTER this routine's corrected-LE/ToT
+// cuts: N >= 2 versus N == 1 selected pulses in that bar. Repeated pulses on the
+// same pixel count separately; pulses on other bars do not affect N.
 void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                              const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
                              double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
@@ -1182,6 +1193,14 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundCDetXCorrVsX");
   static TH2D* hCDetXCorrVsX = nullptr;
   delete hCDetXCorrVsX;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundRxMultiple");
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundRxSingle");
+  delete hPulseBackgroundRxMultiple;
+  delete hPulseBackgroundRxSingle;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundDtVsRxMultiple");
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundDtVsRxSingle");
+  delete hPulseBackgroundDtVsRxMultiple;
+  delete hPulseBackgroundDtVsRxSingle;
 
   // Define histograms before the event/hit loop.
   hECalT = new TH1D("hPulseBackgroundECalTime", TString::Format("ECal ADC time: %.1f #leq t #leq %.1f ns;ECal ADC time (ns);Events", ECalMinT, ECalMaxT), nECalTimeBins, ECalDisplayMin, ECalDisplayMax);
@@ -1196,7 +1215,16 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   hCDetX->SetDirectory(nullptr);
   hCDetXCorr->SetDirectory(nullptr);
   hCDetXCorrVsX->SetDirectory(nullptr);
+  hPulseBackgroundRxMultiple = new TH1D("hPulseBackgroundRxMultiple", TString::Format("Bar %d: at least two selected pulses/event;rx (m);Pulses", controlBar), nRxBins, RxMin, RxMax);
+  hPulseBackgroundRxSingle = new TH1D("hPulseBackgroundRxSingle", TString::Format("Bar %d: exactly one selected pulse/event;rx (m);Pulses", controlBar), nRxBins, RxMin, RxMax);
+  hPulseBackgroundRxMultiple->SetDirectory(nullptr);
+  hPulseBackgroundRxSingle->SetDirectory(nullptr);
+  hPulseBackgroundDtVsRxMultiple = new TH2D("hPulseBackgroundDtVsRxMultiple", TString::Format("Bar %d: at least two selected pulses/event;rx (m);Stored pulse.ecal_residual (ns);Pulses", controlBar), nRxBins, RxMin, RxMax, nDtBins, DtMin, DtMax);
+  hPulseBackgroundDtVsRxSingle = new TH2D("hPulseBackgroundDtVsRxSingle", TString::Format("Bar %d: exactly one selected pulse/event;rx (m);Stored pulse.ecal_residual (ns);Pulses", controlBar), nRxBins, RxMin, RxMax, nDtBins, DtMin, DtMax);
+  hPulseBackgroundDtVsRxMultiple->SetDirectory(nullptr);
+  hPulseBackgroundDtVsRxSingle->SetDirectory(nullptr);
 
+  Long64_t multiplePulseEvents = 0, singlePulseEvents = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
     const double e_ECal = vECalE[event];
     const double t_ECal = vECalAdcTime[event];
@@ -1209,13 +1237,15 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
     if (!good_ecal_event) continue;
     hECalT->Fill(t_ECal);
 
+    // Collect this event's selected bar pulses before deciding its multiplicity.
+    std::vector<double> eventBarRx;
+    std::vector<double> eventBarDt;
     for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
       const double id = vPulseID[event][hit];
       if (!std::isfinite(id) || id < 0 || id >= numBars * pixelsPerBar || std::floor(id) != id) continue;
       const int bar = int(id) / pixelsPerBar;
       const int pixel = int(id) % pixelsPerBar;
       if (bar != controlBar) continue;
-
       const double dt = vPulseDt[event][hit]; // pulse.ecal_residual, ns.
       const double le = vPulseLe[event][hit]; // Uncorrected LE, already in ns.
       const double leCorr = vPulseLeCorr[event][hit];
@@ -1239,7 +1269,29 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
       hCDetX->Fill(x);
       hCDetXCorr->Fill(xCorr);
       hCDetXCorrVsX->Fill(x,xCorr);
+      eventBarRx.push_back(rx);
+      eventBarDt.push_back(dt);
+    }
 
+    // Only this event determines its category; display bounds do not change N.
+    TH1D* rxHistogram = nullptr;
+    TH2D* dtVsRxHistogram = nullptr;
+    if (eventBarRx.size() >= 2) {
+      ++multiplePulseEvents;
+      rxHistogram = hPulseBackgroundRxMultiple;
+      dtVsRxHistogram = hPulseBackgroundDtVsRxMultiple;
+    } else if (eventBarRx.size() == 1) {
+      ++singlePulseEvents;
+      rxHistogram = hPulseBackgroundRxSingle;
+      dtVsRxHistogram = hPulseBackgroundDtVsRxSingle;
+    }
+    if (rxHistogram) {
+      for (size_t pulse = 0; pulse < eventBarRx.size(); ++pulse) {
+        const double rx = eventBarRx[pulse];
+        const double dt = eventBarDt[pulse];
+        if (std::isfinite(rx)) rxHistogram->Fill(rx);
+        if (std::isfinite(rx) && std::isfinite(dt)) dtVsRxHistogram->Fill(rx, dt);
+      }
     }
   }
 
@@ -1284,8 +1336,57 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   cCDetXCorrVsX->Update();
   cCDetXCorrVsX->SaveAs(TString::Format("%s/bar%03d_background_x_corr_vs_x.pdf", outputDirectory.Data(), controlBar));
 
+  // Identical bins, axes, count scale, and styling; separate windows side by side.
+  TH1D* rxHistograms[] = {hPulseBackgroundRxMultiple, hPulseBackgroundRxSingle};
+  const char* categories[] = {"Multiple", "Single"};
+  const Long64_t eventCounts[] = {multiplePulseEvents, singlePulseEvents};
+  const double rxMaximum = 1.2 * std::max(1.0, std::max(rxHistograms[0]->GetMaximum(), rxHistograms[1]->GetMaximum()));
+  for (int category = 0; category < 2; ++category) {
+    TCanvas* canvas = new TCanvas(TString::Format("cPulseBackgroundRx%s", categories[category]), TString::Format("Bar %d: %s-pulse events", controlBar, categories[category]), 40 + 720 * category, 80, 700, 600);
+    TH1D* histogram = rxHistograms[category];
+    histogram->SetStats(false);
+    histogram->SetLineColor(kBlue + 1);
+    histogram->SetLineWidth(2);
+    histogram->SetMinimum(0.0);
+    histogram->SetMaximum(rxMaximum);
+    histogram->Draw("HIST");
+    TLatex label;
+    label.SetNDC();
+    label.SetTextSize(0.032);
+    label.DrawLatex(0.14, 0.84, TString::Format("Events: %lld; finite-rx pulses: %.0f", eventCounts[category], histogram->GetEntries()));
+    label.DrawLatex(0.14, 0.79, TString::Format("Outside axes: %.0f pulses", histogram->GetEntries() - histogram->Integral()));
+    canvas->Modified();
+    canvas->Update();
+    canvas->SaveAs(TString::Format("%s/bar%03d_background_rx_%s.pdf", outputDirectory.Data(), controlBar, categories[category]));
+  }
+
+  // Compare raw pulse counts with identical axes and a shared colour scale.
+  TH2D* dtVsRxHistograms[] = {hPulseBackgroundDtVsRxMultiple, hPulseBackgroundDtVsRxSingle};
+  const double dtVsRxMaximum = std::max(1.0, std::max(dtVsRxHistograms[0]->GetMaximum(), dtVsRxHistograms[1]->GetMaximum()));
+  for (int category = 0; category < 2; ++category) {
+    TCanvas* canvas = new TCanvas(TString::Format("cPulseBackgroundDtVsRx%s", categories[category]), TString::Format("Bar %d: dt versus rx, %s-pulse events", controlBar, categories[category]), 40 + 920 * category, 120, 900, 650);
+    TH2D* histogram = dtVsRxHistograms[category];
+    histogram->SetStats(false);
+    histogram->SetMinimum(0.0);
+    histogram->SetMaximum(dtVsRxMaximum);
+    canvas->SetRightMargin(0.15);
+    canvas->SetTopMargin(0.20);
+    histogram->Draw("COLZ");
+    TLatex label;
+    label.SetNDC();
+    label.SetTextSize(0.028);
+    label.DrawLatex(0.14, 0.87, TString::Format("Events: %lld; finite dt/rx pulses: %.0f", eventCounts[category], histogram->GetEntries()));
+    label.DrawLatex(0.14, 0.82, TString::Format("Outside axes: %.0f pulses", histogram->GetEntries() - histogram->Integral()));
+    canvas->Modified();
+    canvas->Update();
+    canvas->SaveAs(TString::Format("%s/bar%03d_background_dt_vs_rx_%s.pdf", outputDirectory.Data(), controlBar, categories[category]));
+  }
+
   std::cout << "[CDet pulse background] Filled ECal time for " << hECalT->GetEntries()
             << " selected events and CDet histograms for " << hDt->GetEntries()
-            << " selected pulses in bar " << controlBar << ". Six canvases remain open.\n"
+            << " selected pulses in bar " << controlBar << ". Ten canvases remain open.\n"
+            << "  rx split after corrected-LE/ToT cuts: " << multiplePulseEvents
+            << " events with >=2 pulses, " << singlePulseEvents << " events with exactly 1 pulse.\n"
+            << "  rx histograms count pulses, not events; repeated pulses on one pixel count separately.\n"
             << "  PDF output: " << outputDirectory << '\n';
 }
