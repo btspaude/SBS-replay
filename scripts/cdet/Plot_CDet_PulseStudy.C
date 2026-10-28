@@ -1076,7 +1076,7 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
 // cuts: N >= 2 versus N == 1 selected pulses in that bar. Repeated pulses on the
 // same pixel count separately; pulses on other bars do not affect N.
 void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
-                             const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
+                             const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1, int controlPixel = -1,
                              double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
                              double ECalBinWidth = 0.5, double ECalDisplayMin = NAN, double ECalDisplayMax = NAN,
                              double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN,
@@ -1090,6 +1090,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   }
   if (studyBar == -1) studyBar = config.GetValue("pulse_pixel_timing.study_bar", 19);
   if (controlBar == -1) controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
+  if (controlPixel == -1) controlPixel = config.GetValue("pulse_pixel_timing.control_pixel", 9);
   if (std::isnan(BinWidth)) BinWidth = config.GetValue("pulse_study.dt_bin_width_ns", 1.0);
   if (std::isnan(DtMin)) DtMin = config.GetValue("display.ecal_cdet_dt_min", -90.0);
   if (std::isnan(DtMax)) DtMax = config.GetValue("display.ecal_cdet_dt_max", 0.0);
@@ -1154,6 +1155,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
   const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
   const int nRxBins = int(std::ceil((RxMax - RxMin) / RxBinWidth));
+  const int nCDetTotBins = int(std::ceil((TotMax - TotMin) / BinWidth));
   TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
   if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
   const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
@@ -1178,6 +1180,9 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   static TH1D* hECalT = nullptr;
   delete hECalT;
 
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundCDetTotVsRx");
+  static TH2D* hCDetTotVsRx = nullptr;
+  delete hCDetTotVsRx;
   delete gROOT->GetListOfCanvases()->FindObject("cPulseBackgroundDtVsRx");
   static TH2D* hDtVsRx = nullptr;
   delete hDtVsRx;
@@ -1210,6 +1215,8 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   hCDetX = new TH1D("hPulseBackgroundCDetX", TString::Format("Bar %d: channel x;Channel CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
   hCDetXCorr = new TH1D("hPulseBackgroundCDetXCorr", TString::Format("Bar %d: aligned x;Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
   hCDetXCorrVsX = new TH2D("hPulseBackgroundCDetXCorrVsX", TString::Format("Bar %d: aligned x versus channel x;Channel CDet x (m);Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax, nPositionBins, PositionMin, PositionMax);
+  hCDetTotVsRx = new TH2D("hPulseBackgroundCDetTotVsRx", TString::Format("Bar %d Pixel %d: CDet Tot versus rx;rx (m);CDet Tot (ns);Pulses", controlBar, controlPixel), nRxBins, RxMin, RxMax, nCDetTotBins, TotMin, TotMax);
+  hCDetTotVsRx->SetDirectory(nullptr);
   hDtVsRx->SetDirectory(nullptr);
   hDt->SetDirectory(nullptr);
   hCDetX->SetDirectory(nullptr);
@@ -1240,6 +1247,8 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
     // Collect this event's selected bar pulses before deciding its multiplicity.
     std::vector<double> eventBarRx;
     std::vector<double> eventBarDt;
+    std::vector<double> eventPixel;
+    std::vector<double> eventTot;
     for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
       const double id = vPulseID[event][hit];
       if (!std::isfinite(id) || id < 0 || id >= numBars * pixelsPerBar || std::floor(id) != id) continue;
@@ -1271,6 +1280,8 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
       hCDetXCorrVsX->Fill(x,xCorr);
       eventBarRx.push_back(rx);
       eventBarDt.push_back(dt);
+      eventPixel.push_back(pixel);
+      eventTot.push_back(tot);
     }
 
     // Only this event determines its category; display bounds do not change N.
@@ -1287,15 +1298,24 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
     }
     if (rxHistogram) {
       for (size_t pulse = 0; pulse < eventBarRx.size(); ++pulse) {
+        if (eventPixel[pulse] != controlPixel) continue; // Only the selected pixel.
         const double rx = eventBarRx[pulse];
         const double dt = eventBarDt[pulse];
         if (std::isfinite(rx)) rxHistogram->Fill(rx);
         if (std::isfinite(rx) && std::isfinite(dt)) dtVsRxHistogram->Fill(rx, dt);
+        if (std::isfinite(rx) && std::isfinite(eventTot[pulse])) hCDetTotVsRx->Fill(rx, eventTot[pulse]);
       }
     }
   }
 
   // Draw after filling; keep the caller's ROOT mode so canvases stay interactive.
+  TCanvas* cCDetTotVsRx = new TCanvas("cPulseBackgroundCDetTotVsRx", TString::Format("Bar %d Pixel %d: CDet Tot versus rx", controlBar, controlPixel), 900, 650);
+  gPad->SetRightMargin(0.15);
+  hCDetTotVsRx->Draw("COLZ");
+  cCDetTotVsRx->Modified();
+  cCDetTotVsRx->Update();
+  cCDetTotVsRx->SaveAs(TString::Format("%s/bar%03d_pixel%02d_background_cdet_tot_vs_rx.pdf", outputDirectory.Data(), controlBar, controlPixel));
+
   TCanvas* cECalT = new TCanvas("cPulseBackgroundECalTime", TString::Format("ECal ADC time: %.1f <= t <= %.1f ns", ECalMinT, ECalMaxT), 900, 650);
   hECalT->Draw("HIST");
   cECalT->Modified();
