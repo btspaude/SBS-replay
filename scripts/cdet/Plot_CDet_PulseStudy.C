@@ -1159,6 +1159,9 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   const double controlFitMax = config.GetValue("pulse_study.control_fit_max", 0.0);
   const double FitMin = config.GetValue("pulse_study.fit_min", -50.0);
   const double FitMax = config.GetValue("pulse_study.fit_max", 0.0);
+  const double DtMin = config.GetValue("display.ecal_cdet_dt_min", -50.0);
+  const double DtMax = config.GetValue("display.ecal_cdet_dt_max", 50.0);
+  const double BinWidth = config.GetValue("pulse_study.dt_bin_width_ns", 1.0);
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
@@ -1170,6 +1173,14 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
 
+  if (!std::isfinite(DtMin) || !std::isfinite(DtMax) || DtMin >= DtMax ||
+      !std::isfinite(BinWidth) || BinWidth <= 0.0 ||
+      !std::isfinite((DtMax - DtMin) / BinWidth) ||
+      std::ceil((DtMax - DtMin) / BinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse offsets] Invalid dt display range or bin width.\n";
+    return;
+  }
+  const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
   if (!viewOnly && (!std::isfinite(controlFitMin) || !std::isfinite(controlFitMax) || controlFitMin >= controlFitMax ||
       !std::isfinite(FitMin) || !std::isfinite(FitMax) || FitMin >= FitMax)) {
     std::cerr << "[CDet pulse offsets] Invalid fit windows.\n";
@@ -1184,9 +1195,9 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   TH1D* hBarDt[pixelsPerBar] = {};
   TH1D* hControlBarDt[pixelsPerBar] = {};
   for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
-    hBarDt[pixel] = new TH1D(TString::Format("hBar%dPixel%dDt", myBar, pixel), TString::Format("Bar %d pixel %d;dt [ns];Pulses", myBar, pixel), 100, -50, 50);
+    hBarDt[pixel] = new TH1D(TString::Format("hBar%dPixel%dDt", myBar, pixel), TString::Format("Bar %d pixel %d;dt [ns];Pulses", myBar, pixel), nDtBins, DtMin, DtMax);
     hBarDt[pixel]->SetDirectory(nullptr);
-    hControlBarDt[pixel] = new TH1D(TString::Format("hControlBar%dPixel%dDt", controlBar, pixel), TString::Format("Control bar %d pixel %d;dt [ns];Pulses", controlBar, pixel), 100, -50, 50);
+    hControlBarDt[pixel] = new TH1D(TString::Format("hControlBar%dPixel%dDt", controlBar, pixel), TString::Format("Control bar %d pixel %d;dt [ns];Pulses", controlBar, pixel), nDtBins, DtMin, DtMax);
     hControlBarDt[pixel]->SetDirectory(nullptr);
   }
 
@@ -1250,6 +1261,7 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
       hist->SetStats(false); // Draw a consistent statistics snapshot, including empty spectra.
       hist->SetLineColor(kBlue + 1);
       hist->SetLineWidth(2);
+      if (hist->GetMaximum() > 0.0) hist->SetMaximum(1.5 * hist->GetMaximum()); // Keep peaks below the stats box.
       hist->GetXaxis()->SetTitleSize(0.05);
       hist->GetYaxis()->SetTitleSize(0.05);
       hist->GetXaxis()->SetLabelSize(0.04);

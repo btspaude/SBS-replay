@@ -81,8 +81,10 @@ half needs its own usable donor; no result is borrowed across the boundary.
    cannot verify that the supplied constants match the ROOT-file replay.
 3. Fill separate dt histograms for the study and control pixels in the saved
    event/hit loops. All study pixels are filled, even when only some are selected
-   for fitting. Histograms currently have 100 bins over -50 to +50 ns; these
-   bounds are hard-coded, not taken from the display settings.
+   for fitting. Both study and control histograms use `display.ecal_cdet_dt_min/max`
+   and `pulse_study.dt_bin_width_ns` from the configuration. The 6077 config
+   currently gives 90 bins over -90 to 0 ns; 5710 gives 300 bins over -150 to
+   +150 ns. Both use 1 ns bins.
 4. Draw all 16 study spectra and all 16 control spectra on separate 4x4
    canvases and save PDFs. View mode returns here.
 5. In fit mode, fit control histograms and determine the reference `mu0`, then
@@ -102,6 +104,13 @@ secondary ECal and LE/ToT settings into variables but **does not apply those
 additional cuts**. It does not apply an ellipse or a multiplicity selection.
 Changing secondary cut settings alone therefore does not change this extractor's
 selection. Rejected loading events cannot be recovered by a secondary routine.
+
+The number of dt bins is `ceil((DtMax - DtMin) / BinWidth)`, matching the other
+PulseStudy routines. Bounds stay exactly as configured; if their span is not an
+integer multiple of the requested width, the actual bin width is slightly
+smaller. Use an integer-nanosecond span for exact 1 ns bins. Display bounds do not
+reject pulses: values outside them enter underflow/overflow bins. Fits only see
+the histogram's available range, so keep the desired fit windows within it.
 
 ## Peak fitting and acceptance
 
