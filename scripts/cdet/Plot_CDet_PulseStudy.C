@@ -1334,11 +1334,12 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   for (Int_t ev = 0; ev < nevents; ev++){
     Int_t nhits = vPulseID[ev].size();
     double ECalT = vECalAdcTime[ev];
+    if (!std::isfinite(ECalT) || ((ECalT < ECalMinT || ECalT > ECalMaxT))) continue; //apply ECal time cut
     for (Int_t hit = 0; hit < nhits; hit++){
       Int_t bar = Int_t(vPulseID[ev][hit])/pixelsPerBar; //determine which bar
       Int_t pixel = Int_t(vPulseID[ev][hit])%pixelsPerBar; //convert pixelID into pixel within bar
       double rx = vPulseXResiduals[ev][hit];
-      if (!std::isfinite(rx) || std::abs(rx) > xRes || !std::isfinite(vPulseDt[ev][hit]) || ECalT < ECalMinT || ECalT > ECalMaxT) continue; //apply x residual cut
+      if (!std::isfinite(rx) || std::abs(rx) > xRes || !std::isfinite(vPulseDt[ev][hit])) continue; //apply x residual cut
       if (bar == myBar) hBarDt[pixel]->Fill(vPulseDt[ev][hit]);
       if (bar == controlBar) hControlBarDt[pixel]->Fill(vPulseDt[ev][hit]);
     } //end hit loop
