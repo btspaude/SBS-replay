@@ -109,6 +109,7 @@ TH2D* hPulseBackgroundDtVsRxMultiple = nullptr;
 TH2D* hPulseBackgroundDtVsRxSingle = nullptr;
 TH1D* hECalAdcTime = nullptr;
 TH2D* hPulseBarDtVsTot[2] = {};
+TH2D* hPulseBarDtVsTotNoTotCut[2] = {};
 TH1D* hPulseFullBarDtAllCuts[2] = {};
 TH1D* hPulseFullBarDtNoLeCut[2] = {};
 // Remember the actual loading cuts, including main-macro argument overrides.
@@ -793,6 +794,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   for (int selected = 0; selected < 2; ++selected) {
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sCutComparison", roles[selected]));
     delete hPulseBarDtVsTot[selected];
+    delete hPulseBarDtVsTotNoTotCut[selected];
     delete hPulseFullBarDtAllCuts[selected];
     delete hPulseFullBarDtNoLeCut[selected];
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%s", roles[selected]));
@@ -820,10 +822,12 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   // Define all histograms before filling. Display limits are not additional cuts.
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
-    hPulseBarDtVsTot[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTot", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, with LE cut;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
+    hPulseBarDtVsTot[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTot", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, secondary ToT cut %s;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar, applyToTCut ? "applied" : "off"), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
+    hPulseBarDtVsTotNoTotCut[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTotNoTotCut", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, before secondary ToT cut;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
     hPulseFullBarDtAllCuts[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtAllCuts", roles[selected]), TString::Format("Run %d, bar %d: dt with LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
     hPulseFullBarDtNoLeCut[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtNoLeCut", roles[selected]), TString::Format("Run %d, bar %d: dt without LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
     hPulseBarDtVsTot[selected]->SetDirectory(nullptr);
+    hPulseBarDtVsTotNoTotCut[selected]->SetDirectory(nullptr);
     hPulseFullBarDtAllCuts[selected]->SetDirectory(nullptr);
     hPulseFullBarDtNoLeCut[selected]->SetDirectory(nullptr);
     hPulseSummaryBarDt[selected] = new TH1D(TString::Format("hPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: branch dt, all pixels;Stored pulse.ecal_residual (ns);Pulses", roles[selected], bar), nDtBins, DtMin, DtMax);
@@ -885,9 +889,13 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         // If the ellipse is not used, still apply the x residual cut.
         good_ellipse = good_x_res;
       }
-      if (!good_tot || !good_ellipse) continue;
+      if (!std::isfinite(totNs) || totNs <= 0.0 || !good_ellipse) continue;
       for (int selected = 0; selected < 2; ++selected) {
         if (bar != bars[selected]) continue;
+        // Compare the secondary ToT window with all other cuts, including LE, fixed.
+        // Pulses rejected by the main loading ToT window are not in these vectors.
+        if (good_le) hPulseBarDtVsTotNoTotCut[selected]->Fill(totNs, dt);
+        if (!good_tot) continue;
         // Same event, ToT, and spatial/ellipse cuts; omit only the raw-LE cut.
         hPulseFullBarDtNoLeCut[selected]->Fill(dt);
         if (!good_le) continue;
@@ -902,29 +910,33 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         hPulseBarDtVsTot[selected]->Fill(totNs, dt);
         hPulseFullBarDtAllCuts[selected]->Fill(dt);
       }
-      if (good_le) ++filledPulses;
+      if (good_le && good_tot) ++filledPulses;
     }
   }
-  // Nine canvases per bar; the new comparison combines three histograms.
+  // Nine canvases per bar; compare LE cuts on top and secondary ToT cuts below.
   for (int selected = 0; selected < 2; ++selected) {
-    TCanvas* cComparison = new TCanvas(TString::Format("cPulseSummary%sCutComparison", roles[selected]), TString::Format("Run %d, %s bar %d: LE-cut comparison", RunNumber, roles[selected], bars[selected]), 2100, 850);
-    cComparison->Divide(3, 1);
-    TH1* comparisonHistograms[] = {hPulseBarDtVsTot[selected], hPulseFullBarDtAllCuts[selected], hPulseFullBarDtNoLeCut[selected]};
+    TCanvas* cComparison = new TCanvas(TString::Format("cPulseSummary%sCutComparison", roles[selected]), TString::Format("Run %d, %s bar %d: LE and ToT cut comparison", RunNumber, roles[selected], bars[selected]), 1600, 1400);
+    cComparison->Divide(2, 2);
+    TH1* comparisonHistograms[] = {hPulseFullBarDtAllCuts[selected], hPulseFullBarDtNoLeCut[selected], hPulseBarDtVsTotNoTotCut[selected], hPulseBarDtVsTot[selected]};
     const double dtMaximum = 1.15 * std::max(1.0, std::max(hPulseFullBarDtAllCuts[selected]->GetMaximum(), hPulseFullBarDtNoLeCut[selected]->GetMaximum()));
-    for (int panel = 0; panel < 3; ++panel) {
+    const double dtVsTotMaximum = std::max(1.0, std::max(hPulseBarDtVsTotNoTotCut[selected]->GetMaximum(), hPulseBarDtVsTot[selected]->GetMaximum()));
+    for (int panel = 0; panel < 4; ++panel) {
       cComparison->cd(panel + 1);
       gPad->SetTopMargin(0.39);
       gPad->SetLeftMargin(0.13);
-      gPad->SetRightMargin(panel == 0 ? 0.16 : 0.05);
+      gPad->SetRightMargin(panel >= 2 ? 0.16 : 0.05);
       TH1* histogram = comparisonHistograms[panel];
       histogram->SetStats(false);
-      if (panel > 0) {
+      if (panel < 2) {
         histogram->SetMinimum(0.0);
         histogram->SetMaximum(dtMaximum);
         histogram->SetLineWidth(2);
-        histogram->SetLineColor(panel == 1 ? kBlue + 1 : kRed + 1);
+        histogram->SetLineColor(panel == 0 ? kBlue + 1 : kRed + 1);
+      } else {
+        histogram->SetMinimum(0.0);
+        histogram->SetMaximum(dtVsTotMaximum);
       }
-      histogram->Draw(panel == 0 ? "COLZ" : "HIST");
+      histogram->Draw(panel >= 2 ? "COLZ" : "HIST");
       TPaveText* cuts = new TPaveText(0.10, 0.63, 0.94, 0.93, "NDC");
       cuts->SetFillColor(kWhite);
       cuts->SetBorderSize(0);
@@ -935,14 +947,15 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
       cuts->AddText(applyECalEnergyCut ? TString::Format("Secondary: %.3g < E_{ECal} < %.3g GeV", ECalMinE, ECalMaxE) : TString("Secondary ECal energy cut: off"));
       cuts->AddText(applyECalTimeCut ? TString::Format("Secondary: %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT) : TString("Secondary ECal time cut: off"));
-      cuts->AddText(applyToTCut ? TString::Format("Secondary: %.3g #leq ToT #leq %.3g ns", TotMin, TotMax) : TString("Secondary ToT window: off; finite ToT > 0 required"));
+      cuts->AddText(panel == 2 ? TString("Before secondary ToT window; finite ToT > 0 required") :
+          (applyToTCut ? TString::Format("Secondary: %.3g #leq ToT #leq %.3g ns", TotMin, TotMax) : TString("Secondary ToT window: off; finite ToT > 0 required")));
       if (useEllipse) {
         cuts->AddText(TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g", ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius * ellipseRadius));
         cuts->AddText("Ellipse units: rx in m, dt in ns; finite dt/rx required");
       } else {
         cuts->AddText(TString::Format("|rx| #leq %.3g m; ellipse off; finite dt/rx required", xRes));
       }
-      cuts->AddText(panel == 2 ? TString("Raw LE cut: off (all other cuts unchanged)") : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
+      cuts->AddText(panel == 1 ? TString("Raw LE cut: off (all other cuts unchanged)") : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
       cuts->Draw();
     }
     cComparison->Modified();
