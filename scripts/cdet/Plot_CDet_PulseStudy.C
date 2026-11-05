@@ -21,6 +21,9 @@
 #include <TChain.h>
 #include <TCanvas.h>
 #include <TEnv.h>
+#include <TF1.h>
+#include <TFitResult.h>
+#include <TFitResultPtr.h>
 #include <TH1D.h>
 #include <TH2D.h>
 #include <TLatex.h>
@@ -28,6 +31,9 @@
 #include <TList.h>
 #include <TROOT.h>
 #include <TPad.h>
+#include <TPaveStats.h>
+#include <TPaveText.h>
+#include <TStyle.h>
 #include <TSystem.h>
 #include <TTreeReader.h>
 #include <TTreeReaderArray.h>
@@ -35,8 +41,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "CDetRunDataset.h"
@@ -1068,6 +1078,425 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
             << "  PDF output: " << outputDirectory << '\n';
 }
 
+// calibrationFile must contain the pixel constants used to replay the saved events.
+// Results are proposals only; this routine does not modify calibration files.
+// CSV writing is opt-in. Reusing an output filename replaces its previous contents.
+// CSV: all 16 pixels (ns). Successful donors retain their own fitted mu;
+// other pixels inherit the weighted donor mu from the full bar or their half.
+// c = mu - mu0; final offset = this pixel's existing offset + c.
+// Empty fields mean unresolved. Errors exclude uncertainty in the inheritance assumption.
+void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<int> &goodPixels = {}, bool fullNINO = true, const char* configFile = "CDet_run6077_pulse_pixel_timing.conf", const char* calibrationFile = "CDet_calibration_dt.dat", bool writeCSV = false, const char* csvFile = nullptr)
+{
+  const int fitMode = fullNINO ? 2 : 1; // 2: full bar; 1: separate eight-pixel halves.
+
+  TEnv config;
+  if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
+      config.GetValue("config.version", 0) != 1) {
+    std::cerr << "[CDet pulse offsets] Cannot read configuration with config.version: 1.\n";
+    return;
+  }
+
+  const int controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
+  if (myBar < 0 || myBar >= numBars || controlBar < 0 || controlBar >= numBars) {
+    std::cerr << "[CDet pulse offsets] Bar IDs must be 0..167.\n";
+    return;
+  }
+  for (int pixel : goodPixels) {
+    if (pixel < 0 || pixel >= pixelsPerBar) {
+      std::cerr << "[CDet pulse offsets] Selected local pixel IDs must be 0..15.\n";
+      return;
+    }
+  }
+
+  // Master-file rows are global pixel ID, offset (ns), and hit count.
+  // Missing offsets must not silently become zero.
+  std::vector<double> existingOffsets(numBars * pixelsPerBar, NAN);
+  if (!viewOnly) {
+    std::ifstream calibration(calibrationFile ? calibrationFile : "");
+    if (!calibration) {
+      std::cerr << "[CDet pulse offsets] Cannot read calibration file.\n";
+      return;
+    }
+    bool inPixelOffsets = false;
+    std::string line;
+    while (std::getline(calibration, line)) {
+      line = line.substr(0, line.find('#'));
+      const size_t first = line.find_first_not_of(" \t\r");
+      if (first == std::string::npos) continue;
+      line = line.substr(first, line.find_last_not_of(" \t\r") - first + 1);
+      if (line[0] == '[') {
+        inPixelOffsets = line == "[PixelOffsets]";
+        continue;
+      }
+      if (!inPixelOffsets) continue;
+      std::istringstream row(line);
+      int pixelID;
+      double offset;
+      Long64_t nhits;
+      if (!(row >> pixelID >> offset >> nhits) || pixelID < 0 ||
+          pixelID >= numBars * pixelsPerBar || !std::isfinite(offset) ||
+          std::isfinite(existingOffsets[pixelID])) {
+        std::cerr << "[CDet pulse offsets] Invalid or duplicate [PixelOffsets] row: " << line << '\n';
+        return;
+      }
+      existingOffsets[pixelID] = offset;
+    }
+    for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+      if (!std::isfinite(existingOffsets[myBar * pixelsPerBar + pixel])) {
+        std::cerr << "[CDet pulse offsets] Missing existing offset for pixel "
+                  << myBar * pixelsPerBar + pixel << ".\n";
+        return;
+      }
+    }
+    std::cout << "[CDet pulse offsets] Existing constants: " << calibrationFile
+              << " (must match the ROOT-file replay calibration).\n";
+  }
+
+  // define potential cuts
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
+  const double controlFitMin = config.GetValue("pulse_study.control_fit_min", -40.0);
+  const double controlFitMax = config.GetValue("pulse_study.control_fit_max", 0.0);
+  const double FitMin = config.GetValue("pulse_study.fit_min", -50.0);
+  const double FitMax = config.GetValue("pulse_study.fit_max", 0.0);
+  const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
+  const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
+  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
+  const double LeMin = config.GetValue("analysis.le_min", 0.02);
+  const double LeMax = config.GetValue("analysis.le_max", 60.0);
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const double TotMin = config.GetValue("analysis.tot_min", 4.0);
+  const double TotMax = config.GetValue("analysis.tot_max", 30.0);
+  const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
+
+  if (!viewOnly && (!std::isfinite(controlFitMin) || !std::isfinite(controlFitMax) || controlFitMin >= controlFitMax ||
+      !std::isfinite(FitMin) || !std::isfinite(FitMax) || FitMin >= FitMax)) {
+    std::cerr << "[CDet pulse offsets] Invalid fit windows.\n";
+    return;
+  }
+  if (vPulseID.empty()) {
+    std::cerr << "[CDet pulse offsets] No saved events; run the main macro first.\n";
+    return;
+  }
+
+  // Always define all 16 spectra so empty/unselected pixels have their own pad.
+  TH1D* hBarDt[pixelsPerBar] = {};
+  TH1D* hControlBarDt[pixelsPerBar] = {};
+  for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+    hBarDt[pixel] = new TH1D(TString::Format("hBar%dPixel%dDt", myBar, pixel), TString::Format("Bar %d pixel %d;dt [ns];Pulses", myBar, pixel), 100, -50, 50);
+    hBarDt[pixel]->SetDirectory(nullptr);
+    hControlBarDt[pixel] = new TH1D(TString::Format("hControlBar%dPixel%dDt", controlBar, pixel), TString::Format("Control bar %d pixel %d;dt [ns];Pulses", controlBar, pixel), 100, -50, 50);
+    hControlBarDt[pixel]->SetDirectory(nullptr);
+  }
+
+  Int_t nevents = vECalAdcTime.size();
+  for (Int_t ev = 0; ev < nevents; ev++){
+    Int_t nhits = vPulseID[ev].size();
+    for (Int_t hit = 0; hit < nhits; hit++){
+      Int_t bar = Int_t(vPulseID[ev][hit])/pixelsPerBar; //determine which bar
+      Int_t pixel = Int_t(vPulseID[ev][hit])%pixelsPerBar; //convert pixelID into pixel within bar
+      double rx = vPulseXResiduals[ev][hit];
+      if (!std::isfinite(rx) || std::abs(rx) > xRes || !std::isfinite(vPulseDt[ev][hit])) continue; //apply x residual cut
+      if (bar == myBar) hBarDt[pixel]->Fill(vPulseDt[ev][hit]);
+      if (bar == controlBar) hControlBarDt[pixel]->Fill(vPulseDt[ev][hit]);
+    } //end hit loop
+  } //end event loop
+
+  // Same global unused-channel IDs as PlotElastic.C (not inferred from occupancy).
+  const std::vector<int> unusedPixels = {
+    3, 13, 28, 31, 41, 42, 57, 59, 65, 79, 83, 95, 109, 111, 115, 127,
+    140, 143, 145, 156, 172, 175, 176, 188, 195, 199, 213, 220, 236, 239, 244, 255,
+    268, 271, 284, 287, 300, 303, 307, 319, 332, 335, 339, 351, 354, 364, 371, 381,
+    384, 396, 401, 410, 419, 423, 435, 436, 451, 461, 465, 479, 480, 483, 508, 511,
+    512, 515, 540, 543, 546, 559, 563, 573, 576, 589, 596, 605, 609, 610, 627, 638,
+    643, 655, 656, 665, 674, 675, 696, 703, 707, 709, 725, 729, 738, 748, 752, 766,
+    777, 780, 784, 791, 800, 812, 818, 828, 844, 847, 850, 860, 867, 868, 884, 885,
+    900, 904, 912, 927, 940, 943, 945, 947, 967, 971, 986, 991, 1005, 1007, 1011, 1023,
+    1027, 1028, 1043, 1050, 1066, 1068, 1072, 1075, 1088, 1102, 1106, 1119, 1121, 1135, 1148, 1151,
+    1162, 1166, 1178, 1182, 1184, 1186, 1203, 1215, 1228, 1231, 1235, 1247, 1249, 1252, 1267, 1274,
+    1282, 1285, 1299, 1310, 1317, 1321, 1340, 1341, 1349, 1359, 1372, 1375, 1376, 1391, 1392, 1405,
+    1409, 1420, 1428, 1439, 1443, 1455, 1468, 1471, 1486, 1487, 1500, 1503, 1516, 1519, 1520, 1523,
+    1536, 1551, 1557, 1567, 1568, 1583, 1584, 1597, 1603, 1615, 1617, 1629, 1646, 1647, 1648, 1654,
+    1676, 1679, 1692, 1695, 1708, 1711, 1715, 1725, 1732, 1743, 1744, 1757, 1761, 1770, 1778, 1786,
+    1804, 1807, 1820, 1823, 1836, 1839, 1854, 1855, 1856, 1868, 1877, 1887, 1902, 1903, 1916, 1919,
+    1934, 1935, 1942, 1951, 1964, 1967, 1973, 1983, 1988, 1999, 2000, 2013, 2028, 2031, 2034, 2047,
+    2048, 2051, 2064, 2067, 2080, 2085, 2099, 2104, 2112, 2122, 2131, 2143, 2144, 2147, 2160, 2163,
+    2177, 2188, 2202, 2207, 2208, 2221, 2227, 2239, 2243, 2254, 2259, 2271, 2279, 2283, 2300, 2303,
+    2307, 2316, 2320, 2334, 2339, 2348, 2355, 2367, 2369, 2383, 2384, 2395, 2405, 2409, 2416, 2422,
+    2432, 2435, 2448, 2451, 2464, 2479, 2483, 2493, 2499, 2508, 2512, 2513, 2531, 2537, 2544, 2547,
+    2563, 2570, 2576, 2591, 2592, 2607, 2611, 2621, 2633, 2636, 2643, 2650, 2656, 2657, 2675, 2679
+  };
+  if (gSystem->AccessPathName("PusleStudy") && gSystem->mkdir("PusleStudy", true) != 0) {
+    std::cerr << "[CDet pulse offsets] Cannot create PusleStudy output directory.\n";
+    return;
+  }
+  const int run = config.GetValue("analysis.run_number", 0);
+  const char* plotMode = viewOnly ? "view" : "fit";
+  const TString studyPDF = TString::Format("PusleStudy/run%d_bar%03d_dt_pixels_%s.pdf", run, myBar, plotMode);
+  const TString controlPDF = TString::Format("PusleStudy/run%d_bar%03d_control%03d_dt_pixels_%s.pdf", run, myBar, controlBar, plotMode);
+  if (TObject* old = gROOT->GetListOfCanvases()->FindObject("cPulseOffsetStudy")) delete old;
+  if (TObject* old = gROOT->GetListOfCanvases()->FindObject("cPulseOffsetControl")) delete old;
+  TCanvas* cBarDt = new TCanvas("cPulseOffsetStudy", TString::Format("Bar %d: pixel dt spectra (%s)", myBar, plotMode), 1500, 1100);
+  TCanvas* cControlDt = new TCanvas("cPulseOffsetControl", TString::Format("Control bar %d: pixel dt spectra (%s)", controlBar, plotMode), 1500, 1100);
+  TCanvas* canvases[2] = {cBarDt, cControlDt};
+  const int plotBars[2] = {myBar, controlBar};
+  for (int which = 0; which < 2; ++which) {
+    canvases[which]->Divide(4, 4);
+    for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+      canvases[which]->cd(pixel + 1);
+      TH1D* hist = which == 0 ? hBarDt[pixel] : hControlBarDt[pixel];
+      hist->SetBit(kCanDelete); // Canvas owns its displayed histogram across repeat calls.
+      hist->SetStats(false); // Draw a consistent statistics snapshot, including empty spectra.
+      hist->SetLineColor(kBlue + 1);
+      hist->SetLineWidth(2);
+      hist->GetXaxis()->SetTitleSize(0.05);
+      hist->GetYaxis()->SetTitleSize(0.05);
+      hist->GetXaxis()->SetLabelSize(0.04);
+      hist->GetYaxis()->SetLabelSize(0.04);
+      gPad->SetBottomMargin(0.14);
+      gPad->SetLeftMargin(0.14);
+      hist->Draw();
+      gPad->Update();
+      TPaveStats* stats = new TPaveStats(0.63, 0.68, 0.98, 0.91, "NDC");
+      stats->SetName("pixelStats");
+      stats->SetBit(kCanDelete);
+      stats->SetOptStat(1110);
+      stats->SetOptFit(0);
+      stats->SetFillColor(kWhite);
+      stats->SetBorderSize(1);
+      stats->SetTextFont(42);
+      stats->SetTextSize(0.035);
+      stats->SetTextAlign(12);
+      stats->AddText(TString::Format("Entries = %.0f", hist->GetEntries()));
+      stats->AddText(TString::Format("Mean = %.4g", hist->GetMean()));
+      stats->AddText(TString::Format("Std Dev = %.4g", hist->GetStdDev()));
+      stats->Draw("same");
+      const int pixelID = plotBars[which] * pixelsPerBar + pixel;
+      if (std::find(unusedPixels.begin(), unusedPixels.end(), pixelID) != unusedPixels.end()) {
+        TPaveText* mask = new TPaveText(0.63, 0.68, 0.98, 0.91, "NDC");
+        mask->SetName("unusedPixelMask");
+        mask->SetBit(kCanDelete);
+        mask->SetFillColor(kBlack);
+        mask->SetFillStyle(1001);
+        mask->SetLineColor(kBlack);
+        mask->SetBorderSize(0);
+        mask->Draw("same");
+      }
+      gPad->Modified();
+      gPad->Update();
+    }
+    canvases[which]->Modified();
+    canvases[which]->Update();
+  }
+  // Keep histogram-only PDFs even if a later control fit cannot establish mu0.
+  cBarDt->SaveAs(studyPDF);
+  cControlDt->SaveAs(controlPDF);
+  if (viewOnly) {
+    std::cout << "[CDet pulse offsets] View only: no fits, offset calculation, or CSV writing.\n";
+    return;
+  }
+
+  //fit control bar histograms to get mu0
+  TF1* fControlBarFit[pixelsPerBar] = {};
+  double muControl[pixelsPerBar]; //values of mu for control bar
+  double muControlError[pixelsPerBar]; //errors on mu for control bar
+  double mu0 = 0.0;
+  double mu0Error = 0.0;
+
+  for (Int_t pixel = 0; pixel < pixelsPerBar; pixel++){
+    if (hControlBarDt[pixel]->GetEntries() > 0){
+      fControlBarFit[pixel] = new TF1(TString::Format("fControlBar%dPixel%dFit", controlBar, pixel), "gaus(0)+pol1(3)", controlFitMin, controlFitMax);
+      hControlBarDt[pixel]->GetXaxis()->SetRangeUser(controlFitMin, controlFitMax);
+      const double peak = hControlBarDt[pixel]->GetBinCenter(hControlBarDt[pixel]->GetMaximumBin());
+      const double background = hControlBarDt[pixel]->GetMinimum();
+      fControlBarFit[pixel]->SetParameters(std::max(1.0, hControlBarDt[pixel]->GetMaximum() - background), peak, (controlFitMax - controlFitMin) / 10.0, background, 0.0);
+      hControlBarDt[pixel]->GetXaxis()->SetRange(0, 0);
+      TFitResultPtr fitResult = hControlBarDt[pixel]->Fit(fControlBarFit[pixel], "QRS0");
+      muControl[pixel] = fControlBarFit[pixel]->GetParameter(1);
+      muControlError[pixel] = fControlBarFit[pixel]->GetParError(1);
+      if (int(fitResult) != 0 || !fitResult.Get() || fitResult->CovMatrixStatus() < 2 ||
+          !std::isfinite(muControl[pixel]) || !std::isfinite(muControlError[pixel]) || muControlError[pixel] <= 0.0 ||
+          muControl[pixel] <= controlFitMin || muControl[pixel] >= controlFitMax ||
+          fControlBarFit[pixel]->GetParameter(0) <= 0.0 ||
+          !std::isfinite(fControlBarFit[pixel]->GetParameter(2)) || std::abs(fControlBarFit[pixel]->GetParameter(2)) <= 0.0) {
+        std::cout << "  Skipping control pixel " << pixel << ": unusable fit.\n";
+        continue;
+      }
+      TF1* drawnFit = hControlBarDt[pixel]->GetFunction(fControlBarFit[pixel]->GetName());
+      if (drawnFit) {
+        drawnFit->ResetBit(TF1::kNotDraw);
+        drawnFit->SetLineColor(kRed + 1);
+        drawnFit->SetLineWidth(2);
+      }
+      mu0 += muControl[pixel] / (muControlError[pixel] * muControlError[pixel]);
+      mu0Error += 1.0 / (muControlError[pixel] * muControlError[pixel]);
+    }
+  }
+
+  if (!std::isfinite(mu0Error) || mu0Error <= 0.0 || !std::isfinite(mu0)) {
+    std::cerr << "[CDet pulse offsets] No usable weighted control reference; no offsets proposed.\n";
+    return;
+  }
+  mu0 /= mu0Error;
+  mu0Error = std::sqrt(1.0 / mu0Error);
+
+  std::cout << "mu0 = " << mu0 << " +/- " << mu0Error << std::endl;
+  if (!viewOnly){
+    // Fit selected pixels individually, grouped for the later offset calculation.
+    // Mode 2: one group (0-15). Mode 1: two groups (0-7 and 8-15).
+    TF1* fBarFit[pixelsPerBar] = {};
+    double muBar[pixelsPerBar]; //values of mu for bar of interest
+    double muBarError[pixelsPerBar]; //errors on mu for bar of interest
+    double barOffset[pixelsPerBar]; //proposed per-pixel final constants, not applied to the DB
+    double barOffsetError[pixelsPerBar]; //fit/reference errors only; excludes sharing/model uncertainty
+    bool hasIndividualFit[pixelsPerBar] = {};
+    std::fill_n(muBar, pixelsPerBar, NAN);
+    std::fill_n(muBarError, pixelsPerBar, NAN);
+    std::fill_n(barOffset, pixelsPerBar, NAN);
+    std::fill_n(barOffsetError, pixelsPerBar, NAN);
+
+    const int nGroups = fitMode == 2 ? 1 : 2;
+    const int pixelsPerGroup = pixelsPerBar / nGroups;
+    for (Int_t group = 0; group < nGroups; group++){
+      const int firstPixel = group * pixelsPerGroup;
+      const int lastPixel = firstPixel + pixelsPerGroup;
+      double weightedMuSum = 0.0;
+      double weightSum = 0.0;
+      int donors = 0;
+      for (Int_t pixel = firstPixel; pixel < lastPixel; pixel++){
+        // An empty list considers all pixels in this group.
+        if (!goodPixels.empty() &&
+            std::find(goodPixels.begin(), goodPixels.end(), pixel) == goodPixels.end()) continue;
+        if (hBarDt[pixel]->GetEntries() > 0){
+          fBarFit[pixel] = new TF1(TString::Format("fBar%dPixel%dFit", myBar, pixel), "gaus(0)+pol1(3)", FitMin, FitMax);
+          hBarDt[pixel]->GetXaxis()->SetRangeUser(FitMin, FitMax);
+          const double peak = hBarDt[pixel]->GetBinCenter(hBarDt[pixel]->GetMaximumBin());
+          const double background = hBarDt[pixel]->GetMinimum();
+          fBarFit[pixel]->SetParameters(std::max(1.0, hBarDt[pixel]->GetMaximum() - background), peak, (FitMax - FitMin) / 10.0, background, 0.0);
+          hBarDt[pixel]->GetXaxis()->SetRange(0, 0);
+          TFitResultPtr fitResult = hBarDt[pixel]->Fit(fBarFit[pixel], "QRS0");
+          muBar[pixel] = fBarFit[pixel]->GetParameter(1);
+          muBarError[pixel] = fBarFit[pixel]->GetParError(1);
+          if (int(fitResult) != 0 || !fitResult.Get() || fitResult->CovMatrixStatus() < 2 ||
+              !std::isfinite(muBar[pixel]) || !std::isfinite(muBarError[pixel]) || muBarError[pixel] <= 0.0 ||
+              muBar[pixel] <= FitMin || muBar[pixel] >= FitMax || fBarFit[pixel]->GetParameter(0) <= 0.0 ||
+              !std::isfinite(fBarFit[pixel]->GetParameter(2)) || std::abs(fBarFit[pixel]->GetParameter(2)) <= 0.0) {
+            std::cout << "  Skipping donor pixel " << pixel << ": unusable fit.\n";
+            continue;
+          }
+          const int pixelID = myBar * pixelsPerBar + pixel;
+          const double proposedOffset = existingOffsets[pixelID] + muBar[pixel] - mu0;
+          const double weight = 1.0 / (muBarError[pixel] * muBarError[pixel]);
+          TF1* drawnFit = hBarDt[pixel]->GetFunction(fBarFit[pixel]->GetName());
+          if (drawnFit) {
+            drawnFit->ResetBit(TF1::kNotDraw);
+            drawnFit->SetLineColor(kRed + 1);
+            drawnFit->SetLineWidth(2);
+          }
+          hasIndividualFit[pixel] = true;
+          barOffset[pixel] = proposedOffset;
+          barOffsetError[pixel] = myBar == controlBar ? NAN : std::hypot(muBarError[pixel], mu0Error);
+          weightedMuSum += weight * muBar[pixel];
+          weightSum += weight;
+          ++donors;
+          std::cout << "  Donor local pixel " << pixel << " (ID " << pixelID << "): old="
+                    << existingOffsets[pixelID] << ", mu=" << muBar[pixel]
+                    << ", proposed=" << proposedOffset << " ns\n";
+        }
+      }
+
+      if (!std::isfinite(weightSum) || weightSum <= 0.0 || !std::isfinite(weightedMuSum)) {
+        std::cout << "[CDet pulse offsets] Bar " << myBar << " pixels " << firstPixel << "-" << lastPixel - 1
+                  << ": unresolved (no usable donor weights).\n";
+        continue;
+      }
+      const double groupMu = weightedMuSum / weightSum;
+      const double groupMuError = std::sqrt(1.0 / weightSum);
+      const double groupCorrection = groupMu - mu0;
+      // The common reference uncertainty is added once, not reduced by donor count.
+      // This assumes donor fits and control fits are independent.
+      const double groupError = myBar == controlBar ? NAN : std::sqrt(1.0 / weightSum + mu0Error * mu0Error);
+      int inheritedPixels = 0;
+      for (Int_t pixel = firstPixel; pixel < lastPixel; pixel++) {
+        if (hasIndividualFit[pixel]) continue; // Never replace a successful individual fit.
+        muBar[pixel] = groupMu;
+        muBarError[pixel] = groupMuError;
+        barOffset[pixel] = existingOffsets[myBar * pixelsPerBar + pixel] + groupCorrection;
+        barOffsetError[pixel] = groupError;
+        ++inheritedPixels;
+        std::cout << "  Inherited local pixel " << pixel << ": mu=" << groupMu
+                  << ", c=" << groupCorrection << ", proposed=" << barOffset[pixel] << " ns\n";
+      }
+      std::cout << "[CDet pulse offsets] Bar " << myBar << " pixels " << firstPixel << "-" << lastPixel - 1
+                << ": weighted donor mu = " << groupMu << " +/- " << groupMuError
+                << " ns; inherited c = " << groupCorrection << " +/- " << groupError << " ns.\n"
+                << "  Kept " << donors << " individual fit(s); assigned " << inheritedPixels << " other pixels.\n";
+      if (myBar == controlBar) std::cout << "  Error not estimated: donors overlap the control reference.\n";
+    }
+    std::cout << "[CDet pulse offsets] Proposals only: inspect peaks before assigning to unresolved pixels;\n"
+              << "  preserve established offsets. Numerical fit checks do not establish a signal peak.\n";
+
+    for (int which = 0; which < 2; ++which) {
+      for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+        canvases[which]->cd(pixel + 1);
+        gPad->Modified();
+        gPad->Update();
+      }
+      canvases[which]->Modified();
+      canvases[which]->Update();
+    }
+    cBarDt->SaveAs(studyPDF);
+    cControlDt->SaveAs(controlPDF);
+
+    if (writeCSV) {
+      std::ostringstream csvRows;
+      csvRows << std::setprecision(17);
+      int resolvedPixels = 0;
+      for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+        csvRows << "Bar " << myBar << " pixel " << pixel << ',';
+        if (std::isfinite(barOffset[pixel])) {
+          const double correction = muBar[pixel] - mu0;
+          csvRows << muBar[pixel] << ',' << muBarError[pixel] << ',' << correction << ',';
+          // Overlapping control/donor fits need covariance treatment; error stays blank.
+          if (std::isfinite(barOffsetError[pixel])) csvRows << barOffsetError[pixel];
+          ++resolvedPixels;
+        } else {
+          csvRows << ",,,";
+        }
+        csvRows << '\n';
+      }
+      TString csvPath = csvFile ? csvFile : "";
+      if (csvPath.IsNull()) {
+        if (gSystem->AccessPathName("PusleStudy") && gSystem->mkdir("PusleStudy", true) != 0) {
+          std::cerr << "[CDet pulse offsets] Cannot create PusleStudy output directory.\n";
+          return;
+        }
+        csvPath = TString::Format("PusleStudy/run%d_bar%03d_%s_offsets.csv",
+                                  config.GetValue("analysis.run_number", 0), myBar, fullNINO ? "full" : "halves");
+      }
+      if (!csvPath.EndsWith(".csv")) {
+        std::cerr << "[CDet pulse offsets] Output filename must end in .csv.\n";
+        return;
+      }
+      std::ofstream csv(csvPath.Data());
+      if (!csv) {
+        std::cerr << "[CDet pulse offsets] Cannot write CSV: " << csvPath << '\n';
+        return;
+      }
+      csv << "ID,mu,mu error,c,c error\n" << csvRows.str();
+      csv.close();
+      if (!csv) {
+        std::cerr << "[CDet pulse offsets] CSV write failed: " << csvPath << '\n';
+        return;
+      }
+      std::cout << "[CDet pulse offsets] Saved " << pixelsPerBar << " pixel rows to " << csvPath
+                << " (" << resolvedPixels << " resolved; remaining rows have blank values).\n"
+                << "  Successful donors retain fitted mu; other resolved pixels inherit their group's weighted mu.\n"
+                << "  c = mu - mu0; proposed final offset = existing pixel offset + c (ns).\n";
+    }
+  } //end viewOnly check
+} //end extractBarOffsets
 
 // 8. Background study. Uses the saved vectors; run the main macro first.
 // ECal time is filled once per event passing the energy/time selections below.
