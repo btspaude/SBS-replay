@@ -6,7 +6,7 @@
 // Or override display settings and plot only bar 19:
 //   plotPulseStudy("CDet_run6077_pulse_pixel_timing.conf", "bar19", 1., -150., 150., 19, 19);
 // Saves four PDFs per bar under PusleStudy/<tag>/ without opening plot windows.
-// Interactive study/control plots (eight visible canvases per bar):
+// Interactive study/control plots (nine visible canvases per bar):
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "first_pass");
 // Position/rx overlays (one visible canvas per bar):
 //   plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "positions", 19, 30);
@@ -59,6 +59,31 @@ const int pixelsPerBar = 16;
 const int numBars = 168;
 constexpr double kECalZFromTargetM = 6.144;
 
+// Same global unused-channel IDs as PlotElastic.C (not inferred from occupancy).
+const std::vector<int> unusedPixels = {
+3, 13, 28, 31, 41, 42, 57, 59, 65, 79, 83, 95, 109, 111, 115, 127,
+140, 143, 145, 156, 172, 175, 176, 188, 195, 199, 213, 220, 236, 239, 244, 255,
+268, 271, 284, 287, 300, 303, 307, 319, 332, 335, 339, 351, 354, 364, 371, 381,
+384, 396, 401, 410, 419, 423, 435, 436, 451, 461, 465, 479, 480, 483, 508, 511,
+512, 515, 540, 543, 546, 559, 563, 573, 576, 589, 596, 605, 609, 610, 627, 638,
+643, 655, 656, 665, 674, 675, 696, 703, 707, 709, 725, 729, 738, 748, 752, 766,
+777, 780, 784, 791, 800, 812, 818, 828, 844, 847, 850, 860, 867, 868, 884, 885,
+900, 904, 912, 927, 940, 943, 945, 947, 967, 971, 986, 991, 1005, 1007, 1011, 1023,
+1027, 1028, 1043, 1050, 1066, 1068, 1072, 1075, 1088, 1102, 1106, 1119, 1121, 1135, 1148, 1151,
+1162, 1166, 1178, 1182, 1184, 1186, 1203, 1215, 1228, 1231, 1235, 1247, 1249, 1252, 1267, 1274,
+1282, 1285, 1299, 1310, 1317, 1321, 1340, 1341, 1349, 1359, 1372, 1375, 1376, 1391, 1392, 1405,
+1409, 1420, 1428, 1439, 1443, 1455, 1468, 1471, 1486, 1487, 1500, 1503, 1516, 1519, 1520, 1523,
+1536, 1551, 1557, 1567, 1568, 1583, 1584, 1597, 1603, 1615, 1617, 1629, 1646, 1647, 1648, 1654,
+1676, 1679, 1692, 1695, 1708, 1711, 1715, 1725, 1732, 1743, 1744, 1757, 1761, 1770, 1778, 1786,
+1804, 1807, 1820, 1823, 1836, 1839, 1854, 1855, 1856, 1868, 1877, 1887, 1902, 1903, 1916, 1919,
+1934, 1935, 1942, 1951, 1964, 1967, 1973, 1983, 1988, 1999, 2000, 2013, 2028, 2031, 2034, 2047,
+2048, 2051, 2064, 2067, 2080, 2085, 2099, 2104, 2112, 2122, 2131, 2143, 2144, 2147, 2160, 2163,
+2177, 2188, 2202, 2207, 2208, 2221, 2227, 2239, 2243, 2254, 2259, 2271, 2279, 2283, 2300, 2303,
+2307, 2316, 2320, 2334, 2339, 2348, 2355, 2367, 2369, 2383, 2384, 2395, 2405, 2409, 2416, 2422,
+2432, 2435, 2448, 2451, 2464, 2479, 2483, 2493, 2499, 2508, 2512, 2513, 2531, 2537, 2544, 2547,
+2563, 2570, 2576, 2591, 2592, 2607, 2611, 2621, 2633, 2636, 2643, 2650, 2656, 2657, 2675, 2679
+};
+
 // Histograms from the most recent plotPulseStudy() call, available in ROOT.
 TH1D* hStudyBarDt[numBars] = {};
 TH1D* hStudyPixelDt[numBars][pixelsPerBar] = {};
@@ -82,6 +107,14 @@ TH1D* hPulseBackgroundRxMultiple = nullptr;
 TH1D* hPulseBackgroundRxSingle = nullptr;
 TH2D* hPulseBackgroundDtVsRxMultiple = nullptr;
 TH2D* hPulseBackgroundDtVsRxSingle = nullptr;
+TH1D* hECalAdcTime = nullptr;
+TH2D* hPulseBarDtVsTot[2] = {};
+TH1D* hPulseFullBarDtAllCuts[2] = {};
+TH1D* hPulseFullBarDtNoLeCut[2] = {};
+// Remember the actual loading cuts, including main-macro argument overrides.
+int pulseStudyRunNumber = 0;
+TString pulseStudyLoadingECalCuts;
+TString pulseStudyLoadingPulseCuts;
 
 //-------ECal Vectors ---------
 std::vector<double> vECalE;
@@ -112,6 +145,12 @@ std::vector<std::vector<double>> vPulseDt; //Ecal t - Cdet t
 
 void ClearPulseStudyVectors()
 {
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseStudyECalAdcTime");
+  delete hECalAdcTime;
+  hECalAdcTime = nullptr;
+  pulseStudyRunNumber = 0;
+  pulseStudyLoadingECalCuts = "";
+  pulseStudyLoadingPulseCuts = "";
   // ECal
   vECalE.clear();
   vECalAdcTime.clear();
@@ -222,6 +261,21 @@ void Plot_CDet_PulseStudy(
     return;
   }
   const Long64_t limit = nevents >= 0 ? std::min(nevents, entries) : entries;
+
+  const double ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
+  const double ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
+  const double ECalBinWidth = 0.5; // Same default as the background routine, ns.
+  if (!std::isfinite(ECalDisplayMin) || !std::isfinite(ECalDisplayMax) ||
+      ECalDisplayMin >= ECalDisplayMax ||
+      (ECalDisplayMax - ECalDisplayMin) / ECalBinWidth > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse study] Invalid ECal time display bounds.\n";
+    return;
+  }
+  pulseStudyRunNumber = RunNumber;
+  pulseStudyLoadingECalCuts = TString::Format("Loading: %.3g < E_{ECal} < %.3g GeV, %.3g < t_{ECal} < %.3g ns", ECalMinE, ECalMaxE, ECalMinT, ECalMaxT);
+  pulseStudyLoadingPulseCuts = TString::Format("Loading: %.3g < ToT < %.3g ns; eligible, spatial, calib flags", TotMin, TotMax);
+  hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("Run %d: ECal ADC time, saved events;ECal ADC time (ns);Events", RunNumber), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
+  hECalAdcTime->SetDirectory(nullptr);
 
   // 3. SET YOUR TTREEREADERS HERE, before the event loop.
   TTreeReader reader(&T);
@@ -352,6 +406,7 @@ void Plot_CDet_PulseStudy(
     vPulseXResiduals.push_back(thisEventPulseXResiduals);
     vPulseYResiduals.push_back(thisEventPulseYResiduals);
     vPulseDt.push_back(thisEventPulseDt);
+    hECalAdcTime->Fill(*ECalAdcTime); // Scalar: once per saved event, not per pulse.
   }
   if (EventCounter != limit) {
     std::cerr << "[CDet pulse study] Reader stopped after " << EventCounter << '/' << limit
@@ -361,6 +416,23 @@ void Plot_CDet_PulseStudy(
   }
   std::cout << "[CDet pulse study] Read " << EventCounter << " events; saved "
             << vECalE.size() << " ECal-selected events.\n";
+  TCanvas* cECalTime = new TCanvas("cPulseStudyECalAdcTime", TString::Format("Run %d: ECal ADC time", RunNumber), 1000, 750);
+  cECalTime->SetTopMargin(0.27);
+  hECalAdcTime->SetStats(false);
+  hECalAdcTime->Draw("HIST");
+  TPaveText* ecalCuts = new TPaveText(0.12, 0.75, 0.90, 0.92, "NDC");
+  ecalCuts->SetFillColor(kWhite);
+  ecalCuts->SetBorderSize(0);
+  ecalCuts->SetTextAlign(12);
+  ecalCuts->SetTextFont(42);
+  ecalCuts->AddText(pulseStudyLoadingECalCuts);
+  ecalCuts->AddText(pulseStudyLoadingPulseCuts);
+  ecalCuts->AddText("One entry per event with at least one saved CDet pulse; no LE cut");
+  ecalCuts->Draw();
+  cECalTime->Modified();
+  cECalTime->Update();
+  if (!gSystem->AccessPathName("PusleStudy") || gSystem->mkdir("PusleStudy", true) == 0)
+    cECalTime->SaveAs(TString::Format("PusleStudy/run%d_ecal_adc_time.pdf", RunNumber));
   // Call your plotting routine from the ROOT prompt after this returns.
 }
 
@@ -719,6 +791,10 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   // Replace only this routine's previous canvases, including when the bars change.
   delete gROOT->GetListOfCanvases()->FindObject("cControlBar");
   for (int selected = 0; selected < 2; ++selected) {
+    delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sCutComparison", roles[selected]));
+    delete hPulseBarDtVsTot[selected];
+    delete hPulseFullBarDtAllCuts[selected];
+    delete hPulseFullBarDtNoLeCut[selected];
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%s", roles[selected]));
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sBarDt", roles[selected]));
     delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseSummary%sBarLe", roles[selected]));
@@ -740,9 +816,16 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
   }
 
+  const int RunNumber = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
   // Define all histograms before filling. Display limits are not additional cuts.
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
+    hPulseBarDtVsTot[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTot", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, with LE cut;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
+    hPulseFullBarDtAllCuts[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtAllCuts", roles[selected]), TString::Format("Run %d, bar %d: dt with LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
+    hPulseFullBarDtNoLeCut[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtNoLeCut", roles[selected]), TString::Format("Run %d, bar %d: dt without LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
+    hPulseBarDtVsTot[selected]->SetDirectory(nullptr);
+    hPulseFullBarDtAllCuts[selected]->SetDirectory(nullptr);
+    hPulseFullBarDtNoLeCut[selected]->SetDirectory(nullptr);
     hPulseSummaryBarDt[selected] = new TH1D(TString::Format("hPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: branch dt, all pixels;Stored pulse.ecal_residual (ns);Pulses", roles[selected], bar), nDtBins, DtMin, DtMax);
     hPulseSummaryBarLe[selected] = new TH1D(TString::Format("hPulseSummary%sBarLe", roles[selected]), TString::Format("%s bar %d: raw LE, all pixels;Raw CDet LE (ns);Pulses", roles[selected], bar), nLeBins, LeDisplayMin, LeDisplayMax);
     hPulseSummaryBarDt[selected]->SetDirectory(nullptr);
@@ -802,9 +885,12 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         // If the ellipse is not used, still apply the x residual cut.
         good_ellipse = good_x_res;
       }
-      if (!good_le || !good_tot || !good_ellipse) continue;
+      if (!good_tot || !good_ellipse) continue;
       for (int selected = 0; selected < 2; ++selected) {
         if (bar != bars[selected]) continue;
+        // Same event, ToT, and spatial/ellipse cuts; omit only the raw-LE cut.
+        hPulseFullBarDtNoLeCut[selected]->Fill(dt);
+        if (!good_le) continue;
         hPulseSummaryBarDt[selected]->Fill(dt);
         hPulseSummaryBarLe[selected]->Fill(le);
         hPulseSummaryPixelDt[selected][pixel]->Fill(dt);
@@ -813,12 +899,55 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         hPulseSummaryPixelLeVsToT[selected][pixel]->Fill(totNs, le);
         hPulseBarDtVsRx[selected]->Fill(rx, dt);
         hPulsePixelDtVsRx[selected][pixel]->Fill(rx, dt);
+        hPulseBarDtVsTot[selected]->Fill(totNs, dt);
+        hPulseFullBarDtAllCuts[selected]->Fill(dt);
       }
-      ++filledPulses;
+      if (good_le) ++filledPulses;
     }
   }
-  // Eight independent canvases per bar; each pixel canvas keeps its 4x4 grid.
+  // Nine canvases per bar; the new comparison combines three histograms.
   for (int selected = 0; selected < 2; ++selected) {
+    TCanvas* cComparison = new TCanvas(TString::Format("cPulseSummary%sCutComparison", roles[selected]), TString::Format("Run %d, %s bar %d: LE-cut comparison", RunNumber, roles[selected], bars[selected]), 2100, 850);
+    cComparison->Divide(3, 1);
+    TH1* comparisonHistograms[] = {hPulseBarDtVsTot[selected], hPulseFullBarDtAllCuts[selected], hPulseFullBarDtNoLeCut[selected]};
+    const double dtMaximum = 1.15 * std::max(1.0, std::max(hPulseFullBarDtAllCuts[selected]->GetMaximum(), hPulseFullBarDtNoLeCut[selected]->GetMaximum()));
+    for (int panel = 0; panel < 3; ++panel) {
+      cComparison->cd(panel + 1);
+      gPad->SetTopMargin(0.39);
+      gPad->SetLeftMargin(0.13);
+      gPad->SetRightMargin(panel == 0 ? 0.16 : 0.05);
+      TH1* histogram = comparisonHistograms[panel];
+      histogram->SetStats(false);
+      if (panel > 0) {
+        histogram->SetMinimum(0.0);
+        histogram->SetMaximum(dtMaximum);
+        histogram->SetLineWidth(2);
+        histogram->SetLineColor(panel == 1 ? kBlue + 1 : kRed + 1);
+      }
+      histogram->Draw(panel == 0 ? "COLZ" : "HIST");
+      TPaveText* cuts = new TPaveText(0.10, 0.63, 0.94, 0.93, "NDC");
+      cuts->SetFillColor(kWhite);
+      cuts->SetBorderSize(0);
+      cuts->SetTextAlign(12);
+      cuts->SetTextFont(42);
+      cuts->SetTextSize(0.025);
+      cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
+      cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
+      cuts->AddText(applyECalEnergyCut ? TString::Format("Secondary: %.3g < E_{ECal} < %.3g GeV", ECalMinE, ECalMaxE) : TString("Secondary ECal energy cut: off"));
+      cuts->AddText(applyECalTimeCut ? TString::Format("Secondary: %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT) : TString("Secondary ECal time cut: off"));
+      cuts->AddText(applyToTCut ? TString::Format("Secondary: %.3g #leq ToT #leq %.3g ns", TotMin, TotMax) : TString("Secondary ToT window: off; finite ToT > 0 required"));
+      if (useEllipse) {
+        cuts->AddText(TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g", ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius * ellipseRadius));
+        cuts->AddText("Ellipse units: rx in m, dt in ns; finite dt/rx required");
+      } else {
+        cuts->AddText(TString::Format("|rx| #leq %.3g m; ellipse off; finite dt/rx required", xRes));
+      }
+      cuts->AddText(panel == 2 ? TString("Raw LE cut: off (all other cuts unchanged)") : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
+      cuts->Draw();
+    }
+    cComparison->Modified();
+    cComparison->Update();
+    cComparison->SaveAs(TString::Format("%s/bar%03d_%s_le_cut_comparison.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
     TCanvas* cBarDt = new TCanvas(TString::Format("cPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: summed branch dt", roles[selected], bars[selected]), 900, 650);
     hPulseSummaryBarDt[selected]->Draw("HIST");
     cBarDt->Modified();
@@ -892,7 +1021,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     cPixelDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
   }
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
-            << "; selected " << filledPulses << " pulses. Sixteen canvases remain open.\n"
+            << "; selected " << filledPulses << " pulses. Eighteen bar canvases remain open.\n"
             << "  dt uses vPulseDt; LE versus ToT uses uncorrected vPulseLe. All times are in ns.\n"
             << "  dt versus rx uses vPulseDt against stored x residual.\n"
             << "  PDF output: " << outputDirectory << '\n';
@@ -1164,8 +1293,8 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   const double BinWidth = config.GetValue("pulse_study.dt_bin_width_ns", 1.0);
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
-  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
-  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
+  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", -10);
+  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", 10);
   const double LeMin = config.GetValue("analysis.le_min", 0.02);
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
   const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
@@ -1204,40 +1333,17 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   Int_t nevents = vECalAdcTime.size();
   for (Int_t ev = 0; ev < nevents; ev++){
     Int_t nhits = vPulseID[ev].size();
+    double ECalT = vECalAdcTime[ev];
     for (Int_t hit = 0; hit < nhits; hit++){
       Int_t bar = Int_t(vPulseID[ev][hit])/pixelsPerBar; //determine which bar
       Int_t pixel = Int_t(vPulseID[ev][hit])%pixelsPerBar; //convert pixelID into pixel within bar
       double rx = vPulseXResiduals[ev][hit];
-      if (!std::isfinite(rx) || std::abs(rx) > xRes || !std::isfinite(vPulseDt[ev][hit])) continue; //apply x residual cut
+      if (!std::isfinite(rx) || std::abs(rx) > xRes || !std::isfinite(vPulseDt[ev][hit]) || ECalT < ECalMinT || ECalT > ECalMaxT) continue; //apply x residual cut
       if (bar == myBar) hBarDt[pixel]->Fill(vPulseDt[ev][hit]);
       if (bar == controlBar) hControlBarDt[pixel]->Fill(vPulseDt[ev][hit]);
     } //end hit loop
   } //end event loop
 
-  // Same global unused-channel IDs as PlotElastic.C (not inferred from occupancy).
-  const std::vector<int> unusedPixels = {
-    3, 13, 28, 31, 41, 42, 57, 59, 65, 79, 83, 95, 109, 111, 115, 127,
-    140, 143, 145, 156, 172, 175, 176, 188, 195, 199, 213, 220, 236, 239, 244, 255,
-    268, 271, 284, 287, 300, 303, 307, 319, 332, 335, 339, 351, 354, 364, 371, 381,
-    384, 396, 401, 410, 419, 423, 435, 436, 451, 461, 465, 479, 480, 483, 508, 511,
-    512, 515, 540, 543, 546, 559, 563, 573, 576, 589, 596, 605, 609, 610, 627, 638,
-    643, 655, 656, 665, 674, 675, 696, 703, 707, 709, 725, 729, 738, 748, 752, 766,
-    777, 780, 784, 791, 800, 812, 818, 828, 844, 847, 850, 860, 867, 868, 884, 885,
-    900, 904, 912, 927, 940, 943, 945, 947, 967, 971, 986, 991, 1005, 1007, 1011, 1023,
-    1027, 1028, 1043, 1050, 1066, 1068, 1072, 1075, 1088, 1102, 1106, 1119, 1121, 1135, 1148, 1151,
-    1162, 1166, 1178, 1182, 1184, 1186, 1203, 1215, 1228, 1231, 1235, 1247, 1249, 1252, 1267, 1274,
-    1282, 1285, 1299, 1310, 1317, 1321, 1340, 1341, 1349, 1359, 1372, 1375, 1376, 1391, 1392, 1405,
-    1409, 1420, 1428, 1439, 1443, 1455, 1468, 1471, 1486, 1487, 1500, 1503, 1516, 1519, 1520, 1523,
-    1536, 1551, 1557, 1567, 1568, 1583, 1584, 1597, 1603, 1615, 1617, 1629, 1646, 1647, 1648, 1654,
-    1676, 1679, 1692, 1695, 1708, 1711, 1715, 1725, 1732, 1743, 1744, 1757, 1761, 1770, 1778, 1786,
-    1804, 1807, 1820, 1823, 1836, 1839, 1854, 1855, 1856, 1868, 1877, 1887, 1902, 1903, 1916, 1919,
-    1934, 1935, 1942, 1951, 1964, 1967, 1973, 1983, 1988, 1999, 2000, 2013, 2028, 2031, 2034, 2047,
-    2048, 2051, 2064, 2067, 2080, 2085, 2099, 2104, 2112, 2122, 2131, 2143, 2144, 2147, 2160, 2163,
-    2177, 2188, 2202, 2207, 2208, 2221, 2227, 2239, 2243, 2254, 2259, 2271, 2279, 2283, 2300, 2303,
-    2307, 2316, 2320, 2334, 2339, 2348, 2355, 2367, 2369, 2383, 2384, 2395, 2405, 2409, 2416, 2422,
-    2432, 2435, 2448, 2451, 2464, 2479, 2483, 2493, 2499, 2508, 2512, 2513, 2531, 2537, 2544, 2547,
-    2563, 2570, 2576, 2591, 2592, 2607, 2611, 2621, 2633, 2636, 2643, 2650, 2656, 2657, 2675, 2679
-  };
   if (gSystem->AccessPathName("PusleStudy") && gSystem->mkdir("PusleStudy", true) != 0) {
     std::cerr << "[CDet pulse offsets] Cannot create PusleStudy output directory.\n";
     return;
