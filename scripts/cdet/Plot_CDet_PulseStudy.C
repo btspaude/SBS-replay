@@ -920,6 +920,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     TH1* comparisonHistograms[] = {hPulseFullBarDtAllCuts[selected], hPulseFullBarDtNoLeCut[selected], hPulseBarDtVsTotNoTotCut[selected], hPulseBarDtVsTot[selected]};
     const double dtMaximum = 1.15 * std::max(1.0, std::max(hPulseFullBarDtAllCuts[selected]->GetMaximum(), hPulseFullBarDtNoLeCut[selected]->GetMaximum()));
     const double dtVsTotMaximum = std::max(1.0, std::max(hPulseBarDtVsTotNoTotCut[selected]->GetMaximum(), hPulseBarDtVsTot[selected]->GetMaximum()));
+    TPaveText* fullCutLabel = nullptr;
     for (int panel = 0; panel < 4; ++panel) {
       cComparison->cd(panel + 1);
       gPad->SetTopMargin(0.39);
@@ -938,11 +939,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       }
       histogram->Draw(panel >= 2 ? "COLZ" : "HIST");
       TPaveText* cuts = new TPaveText(0.10, 0.63, 0.94, 0.93, "NDC");
+      cuts->SetName("pulseStudyCuts");
+      cuts->SetBit(kCanDelete);
       cuts->SetFillColor(kWhite);
       cuts->SetBorderSize(0);
       cuts->SetTextAlign(12);
       cuts->SetTextFont(42);
       cuts->SetTextSize(0.025);
+      cuts->AddText(TString::Format("Run %d; %s bar %d; all pixels", RunNumber, roles[selected], bars[selected]));
       cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
       cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
       cuts->AddText(applyECalEnergyCut ? TString::Format("Secondary: %.3g < E_{ECal} < %.3g GeV", ECalMinE, ECalMaxE) : TString("Secondary ECal energy cut: off"));
@@ -957,21 +961,22 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       }
       cuts->AddText(panel == 1 ? TString("Raw LE cut: off (all other cuts unchanged)") : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
       cuts->Draw();
+      if (panel == 0) fullCutLabel = cuts; // Same selection as the eight plots below.
     }
     cComparison->Modified();
     cComparison->Update();
     cComparison->SaveAs(TString::Format("%s/bar%03d_%s_le_cut_comparison.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
-    TCanvas* cBarDt = new TCanvas(TString::Format("cPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: summed branch dt", roles[selected], bars[selected]), 900, 650);
+    TCanvas* cBarDt = new TCanvas(TString::Format("cPulseSummary%sBarDt", roles[selected]), TString::Format("%s bar %d: summed branch dt", roles[selected], bars[selected]), 1000, 850);
+    cBarDt->SetTopMargin(0.39);
     hPulseSummaryBarDt[selected]->Draw("HIST");
     cBarDt->Modified();
     cBarDt->Update();
-    cBarDt->SaveAs(TString::Format("%s/bar%03d_%s_dt.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
-    TCanvas* cBarLe = new TCanvas(TString::Format("cPulseSummary%sBarLe", roles[selected]), TString::Format("%s bar %d: summed raw LE", roles[selected], bars[selected]), 900, 650);
+    TCanvas* cBarLe = new TCanvas(TString::Format("cPulseSummary%sBarLe", roles[selected]), TString::Format("%s bar %d: summed raw LE", roles[selected], bars[selected]), 1000, 850);
+    cBarLe->SetTopMargin(0.39);
     hPulseSummaryBarLe[selected]->Draw("HIST");
     cBarLe->Modified();
     cBarLe->Update();
-    cBarLe->SaveAs(TString::Format("%s/bar%03d_%s_raw_le.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
     TCanvas* cPixelDt = new TCanvas(TString::Format("cPulseSummary%sPixelDt", roles[selected]), TString::Format("%s bar %d: pixel branch dt", roles[selected], bars[selected]), 1400, 1000);
     cPixelDt->Divide(4, 4);
@@ -981,7 +986,6 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
     cPixelDt->Modified();
     cPixelDt->Update();
-    cPixelDt->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
     TCanvas* cPixelLe = new TCanvas(TString::Format("cPulseSummary%sPixelLe", roles[selected]), TString::Format("%s bar %d: pixel raw LE", roles[selected], bars[selected]), 1400, 1000);
     cPixelLe->Divide(4, 4);
@@ -991,15 +995,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
     cPixelLe->Modified();
     cPixelLe->Update();
-    cPixelLe->SaveAs(TString::Format("%s/bar%03d_%s_pixels_raw_le.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
-    TCanvas* cBarLeVsToT = new TCanvas(TString::Format("cPulseSummary%sBarLeVsToT", roles[selected]), TString::Format("%s bar %d: summed raw LE versus ToT", roles[selected], bars[selected]), 900, 650);
+    TCanvas* cBarLeVsToT = new TCanvas(TString::Format("cPulseSummary%sBarLeVsToT", roles[selected]), TString::Format("%s bar %d: summed raw LE versus ToT", roles[selected], bars[selected]), 1000, 850);
+    cBarLeVsToT->SetTopMargin(0.39);
     hPulseSummaryBarLeVsToT[selected]->SetStats(false);
     gPad->SetRightMargin(0.15);
     hPulseSummaryBarLeVsToT[selected]->Draw("COLZ");
     cBarLeVsToT->Modified();
     cBarLeVsToT->Update();
-    cBarLeVsToT->SaveAs(TString::Format("%s/bar%03d_%s_le_vs_tot.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
     TCanvas* cPixelLeVsToT = new TCanvas(TString::Format("cPulseSummary%sPixelLeVsToT", roles[selected]), TString::Format("%s bar %d: pixel raw LE versus ToT", roles[selected], bars[selected]), 1400, 1000);
     cPixelLeVsToT->Divide(4, 4);
@@ -1011,15 +1014,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
     cPixelLeVsToT->Modified();
     cPixelLeVsToT->Update();
-    cPixelLeVsToT->SaveAs(TString::Format("%s/bar%03d_%s_pixels_le_vs_tot.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
-    TCanvas* cBarDtVsRx = new TCanvas(TString::Format("cPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: summed branch dt versus rx", roles[selected], bars[selected]), 900, 650);
+    TCanvas* cBarDtVsRx = new TCanvas(TString::Format("cPulseSummary%sBarDtVsRx", roles[selected]), TString::Format("%s bar %d: summed branch dt versus rx", roles[selected], bars[selected]), 1000, 850);
+    cBarDtVsRx->SetTopMargin(0.39);
     hPulseBarDtVsRx[selected]->SetStats(false);
     gPad->SetRightMargin(0.15);
     hPulseBarDtVsRx[selected]->Draw("COLZ");
     cBarDtVsRx->Modified();
     cBarDtVsRx->Update();
-    cBarDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_dt_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
 
     TCanvas* cPixelDtVsRx = new TCanvas(TString::Format("cPulseSummary%sPixelDtVsRx", roles[selected]), TString::Format("%s bar %d: pixel branch dt versus rx", roles[selected], bars[selected]), 1400, 1000);
     cPixelDtVsRx->Divide(4, 4);
@@ -1031,7 +1033,50 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
     cPixelDtVsRx->Modified();
     cPixelDtVsRx->Update();
-    cPixelDtVsRx->SaveAs(TString::Format("%s/bar%03d_%s_pixels_dt_vs_rx.pdf", outputDirectory.Data(), bars[selected], roles[selected]));
+
+    // Every remaining plot uses the full selection. Give each PDF its own cut
+    // label; pixel grids share a header so the 16 spectra stay readable.
+    TCanvas* labeledCanvases[] = {cBarDt, cBarLe, cPixelDt, cPixelLe,
+        cBarLeVsToT, cPixelLeVsToT, cBarDtVsRx, cPixelDtVsRx};
+    const char* plotNames[] = {"dt", "raw_le", "pixels_dt", "pixels_raw_le",
+        "le_vs_tot", "pixels_le_vs_tot", "dt_vs_rx", "pixels_dt_vs_rx"};
+    for (int plot = 0; plot < 8; ++plot) {
+      TCanvas* canvas = labeledCanvases[plot];
+      const bool pixelGrid = plot == 2 || plot == 3 || plot == 5 || plot == 7;
+      canvas->cd();
+      TPaveText* cuts = static_cast<TPaveText*>(fullCutLabel->Clone("pulseStudyCuts"));
+      cuts->SetBit(kCanDelete);
+      if (pixelGrid) {
+        canvas->SetCanvasSize(1400, 1300);
+        for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+          TPad* pad = static_cast<TPad*>(canvas->GetPad(pixel + 1));
+          const double x = pad->GetXlowNDC(), y = pad->GetYlowNDC();
+          const double w = pad->GetWNDC(), h = pad->GetHNDC();
+          pad->SetPad(x, 0.77 * y, x + w, 0.77 * (y + h));
+          pad->Modified();
+        }
+        cuts->SetY1NDC(0.785);
+        cuts->SetY2NDC(0.995);
+        cuts->SetTextSize(0.018);
+      } else {
+        canvas->SetCanvasSize(1000, 850);
+        canvas->SetTopMargin(0.39);
+        // Keep existing 1D statistics below the cut label.
+        TH1* histogram = plot == 0 ? hPulseSummaryBarDt[selected] :
+            (plot == 1 ? hPulseSummaryBarLe[selected] : nullptr);
+        if (histogram) {
+          auto* stats = dynamic_cast<TPaveStats*>(histogram->GetListOfFunctions()->FindObject("stats"));
+          if (stats) {
+            stats->SetY1NDC(0.45);
+            stats->SetY2NDC(0.60);
+          }
+        }
+      }
+      cuts->Draw();
+      canvas->Modified();
+      canvas->Update();
+      canvas->SaveAs(TString::Format("%s/bar%03d_%s_%s.pdf", outputDirectory.Data(), bars[selected], roles[selected], plotNames[plot]));
+    }
   }
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
             << "; selected " << filledPulses << " pulses. Eighteen bar canvases remain open.\n"
