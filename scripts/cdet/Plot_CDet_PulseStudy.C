@@ -279,7 +279,7 @@ void Plot_CDet_PulseStudy(
   }
   pulseStudyRunNumber = RunNumber;
   pulseStudyLoadingECalCuts = TString::Format("Loading: %.3g < E_{ECal} < %.3g GeV, %.3g < t_{ECal} < %.3g ns", ECalMinE, ECalMaxE, ECalMinT, ECalMaxT);
-  pulseStudyLoadingPulseCuts = TString::Format("Loading: %.3g < ToT < %.3g ns; eligible, spatial, calib flags", TotMin, TotMax);
+  pulseStudyLoadingPulseCuts = TString::Format("Loading: %.3g < ToT < %.3g ns; %.3g < LE < %.3g ns; eligible, spatial, calib flags", TotMin, TotMax, LeMin, LeMax);
   hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("Run %d: ECal ADC time, saved events;ECal ADC time (ns);Events", RunNumber), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
   hECalAdcTime->SetDirectory(nullptr);
 
@@ -333,10 +333,10 @@ void Plot_CDet_PulseStudy(
             << "  Configuration: " << configFile << '\n'
             << "  ECal energy: " << ECalMinE << " < E < " << ECalMaxE << " GeV\n"
             << "  ECal ADC time: " << ECalMinT << " < t < " << ECalMaxT << " ns (before hit loop).\n"
-            << "  LE: " << LeMin << " <= LE <= " << LeMax << " ns\n"
+            << "  LE: " << LeMin << " < LE < " << LeMax << " ns\n"
             << "  Loading ToT window: " << TotMin << " < ToT < " << TotMax << " ns.\n"
             << "  Ellipse radius: " << EllipseRadius << " (-1 = off).\n"
-            << "  Loading requires ECal energy/time, replay eligibility/spatial/calibration flags, and ToT.\n";
+            << "  Loading requires ECal energy/time, replay eligibility/spatial/calibration flags, ToT, and LE.\n";
 
   // 4. ONE EVENT LOOP. Save values here; do histogram filling later.
   Long64_t EventCounter = 0;
@@ -369,19 +369,21 @@ void Plot_CDet_PulseStudy(
     std::vector<double> thisEventPulseDt;
 
     for (size_t hit = 0; hit < PulseID.GetSize(); ++hit) {
-      // ADD YOUR CDET HIT-CUT BOOLEANS HERE, then combine them in good_hit.
+      // CDet Hit Cuts
       bool good_ecal_eligible = PulseECalEligible[hit] > 0.5;
       bool good_spatial_pass = PulseSpatialPass[hit] > 0.5;
       bool good_calibration = PulseGoodCalib[hit] > 0.5;
       bool good_pulse_tot = std::isfinite(PulseToT[hit]) && PulseToT[hit] > TotMin && PulseToT[hit] < TotMax;
-      const bool good_hit = good_ecal_eligible && good_spatial_pass && good_calibration && good_pulse_tot;
+      const double leNs = 0.01 * PulseLe[hit];
+      bool good_le = std::isfinite(leNs) && leNs > LeMin && leNs < LeMax;
+      const bool good_hit = good_ecal_eligible && good_spatial_pass && good_calibration && good_pulse_tot && good_le;
       if (!good_hit) continue;
 
       // Copy all fields for the SAME passing pulse; convert raw LE to ns.
       thisEventECalXProjection.push_back(ECalXProjection[hit]);
       thisEventECalYProjection.push_back(ECalYProjection[hit]);
       thisEventPulseID.push_back(PulseID[hit]);
-      thisEventPulseLe.push_back(0.01 * PulseLe[hit]); // Convert raw TDC units to ns once, when saving.
+      thisEventPulseLe.push_back(leNs); // Same calibrated units used for the loading LE cut.
       thisEventPulseLeCorr.push_back(PulseLeCorr[hit]);
       thisEventPulseToT.push_back(PulseToT[hit]);
       thisEventPulseX.push_back(PulseX[hit]);
@@ -689,10 +691,10 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
             << "  Out-of-range values remain in histogram underflow/overflow bins.\n";
 }
 
-// Interactive double-Gaussian signal widths; run the main analysis first.
+// Interactive Gaussian + linear-background signal widths; run the main analysis first.
 // getBarSigma("CDet_run6077_pulse_pixel_timing.conf", "sigma_study");
 // firstBar/lastBar limit only the bar graph; the detector spectrum includes all bars.
-void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
+void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                  const char* outputTag = nullptr, int firstBar = -1, int lastBar = -1,
                  double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN)
 {
@@ -721,12 +723,9 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
-  const double FitMin = config.GetValue("pulse_study.fit_min", -50.0);
-  const double FitMax = config.GetValue("pulse_study.fit_max", 0.0);
   const double FitSignalMin = config.GetValue("pulse_study.fit_signal_min", -36.0);
-  const double FitSignalMax = config.GetValue("pulse_study.fit_signal_max", -10.0);
+  const double FitSignalMax = config.GetValue("pulse_study.fit_signal_max", -20.0);
   const double FitMinEntries = config.GetValue("pulse_study.min_fit_entries", 100.0);
-  const double BgSigma = config.GetValue("pulse_study.fit_bg_sigma", 20.0);
   const double FitSigma = config.GetValue("pulse_study.fit_sigma", 5.0);
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
   const double ellipseXCenter = config.GetValue("good_pulse.single_residual_center_m", 0.0);
@@ -741,12 +740,9 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
       !std::isfinite(DtMin) || !std::isfinite(DtMax) || DtMin >= DtMax ||
       !std::isfinite((DtMax - DtMin) / BinWidth) ||
       std::ceil((DtMax - DtMin) / BinWidth) > std::numeric_limits<int>::max() - 2 ||
-      !std::isfinite(FitMin) || !std::isfinite(FitMax) || FitMin >= FitMax ||
-      FitMin < DtMin || FitMax > DtMax ||
       !std::isfinite(FitSignalMin) || !std::isfinite(FitSignalMax) ||
-      FitSignalMin >= FitSignalMax || FitSignalMin < FitMin || FitSignalMax > FitMax ||
+      FitSignalMin >= FitSignalMax || FitSignalMin < DtMin || FitSignalMax > DtMax ||
       !std::isfinite(FitMinEntries) || FitMinEntries <= 0.0 ||
-      !std::isfinite(BgSigma) || BgSigma <= 0.0 ||
       !std::isfinite(FitSigma) || FitSigma <= 0.0) {
     std::cerr << "[CDet bar sigma] Invalid bar, histogram, or fit settings. Fit windows must lie inside the dt display range.\n";
     return;
@@ -767,11 +763,11 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
     return;
   }
   const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
-  const double fitSpan = FitMax - FitMin;
+  const double fitSpan = FitSignalMax - FitSignalMin;
   const double sigmaMin = 0.5 * (DtMax - DtMin) / nDtBins;
   const double sigmaMax = fitSpan;
-  if (sigmaMin >= sigmaMax || nDtBins < 7) {
-    std::cerr << "[CDet bar sigma] Binning is too coarse for a six-parameter fit.\n";
+  if (sigmaMin >= sigmaMax || nDtBins < 6) {
+    std::cerr << "[CDet bar sigma] Binning is too coarse for a five-parameter fit.\n";
     return;
   }
   TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
@@ -799,6 +795,7 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
   for (const char* name : canvasNames) delete gROOT->GetListOfCanvases()->FindObject(name);
   static std::vector<TH1D*> hBarDt(numBars + 1, nullptr);
   static std::vector<TF1*> fBarDt(numBars + 1, nullptr);
+  static std::vector<TF1*> fBarBackgroundDt(numBars + 1, nullptr);
   static TGraphErrors* gSigmaLayer1 = nullptr;
   static TGraphErrors* gSigmaLayer2 = nullptr;
   static TGraphErrors* gSigmaUnavailable = nullptr;
@@ -813,10 +810,11 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
   gSigmaUnavailable->SetName("gPulseSigmaUnavailable");
 
   // The last slot is the full detector; all earlier slots are individual bars.
-  // Fit parameters: background amplitude/mean/sigma, then signal amplitude/mean/sigma.
+  // Fit parameters: signal amplitude/mean/sigma, then background intercept/slope.
   for (int bar = 0; bar <= numBars; ++bar) {
     delete hBarDt[bar];
     delete fBarDt[bar];
+    delete fBarBackgroundDt[bar];
     const TString title = bar == numBars
         ? TString::Format("Run %d: full-detector dt", RunNumber)
         : TString::Format("Run %d: bar %d dt", RunNumber, bar);
@@ -825,10 +823,9 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
     hBarDt[bar]->SetDirectory(nullptr);
     hBarDt[bar]->SetStats(false);
     fBarDt[bar] = new TF1(TString::Format("fPulseSigmaDt_%d", bar),
-        "gaus(0) + gaus(3)", FitMin, FitMax);
+        "gaus(0) + pol1(3)", FitSignalMin, FitSignalMax);
     fBarDt[bar]->AddToGlobalList(false);
-    fBarDt[bar]->SetParNames("Background amplitude", "Background mean", "Background sigma",
-                           "Signal amplitude", "Signal mean", "Signal sigma");
+    fBarDt[bar]->SetParNames("Signal amplitude", "Signal mean", "Signal sigma", "Linear background intercept", "Linear background slope");
     fBarDt[bar]->SetNpx(1000);
     fBarDt[bar]->SetLineColor(kRed + 1);
   }
@@ -882,39 +879,37 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
     TH1D* hist = hBarDt[bar];
     TF1* fit = fBarDt[bar];
     double fitEntries = 0.0;
+    double height = 0.0;
     int occupiedBins = 0;
     for (int bin = 1; bin <= hist->GetNbinsX(); ++bin) {
-      if (hist->GetBinCenter(bin) < FitMin || hist->GetBinCenter(bin) > FitMax) continue;
+      if (hist->GetBinCenter(bin) < FitSignalMin || hist->GetBinCenter(bin) > FitSignalMax) continue;
       fitEntries += hist->GetBinContent(bin);
+      height = std::max(height, hist->GetBinContent(bin));
       if (hist->GetBinContent(bin) > 0.0) ++occupiedBins;
     }
-    if (fitEntries < FitMinEntries || occupiedBins <= 6) {
+    if (fitEntries < FitMinEntries || occupiedBins <= 5) {
       fitReason[bar] = TString::Format("Insufficient statistics: %.0f fit-window entries, %d occupied bins",
                                       fitEntries, occupiedBins);
     } else {
-      const double height = hist->GetMaximum();
       const double peakGuess = std::max(FitSignalMin, std::min(FitSignalMax, ellipseTimeCenter));
-      fit->SetParameters(height / 3.0, std::max(FitMin, peakGuess - 10.0),
-          std::max(sigmaMin, std::min(sigmaMax, BgSigma)), height, peakGuess,
-          std::max(sigmaMin, std::min(sigmaMax, FitSigma)));
+      fit->SetParameters(height, peakGuess,
+          std::max(sigmaMin, std::min(sigmaMax, FitSigma)), height / 3.0, 0.0);
       fit->SetParLimits(0, 0.0, 10.0 * height);
-      fit->SetParLimits(1, FitMin, FitMax);
+      fit->SetParLimits(1, FitSignalMin, FitSignalMax);
       fit->SetParLimits(2, sigmaMin, sigmaMax);
-      fit->SetParLimits(3, 0.0, 10.0 * height);
-      fit->SetParLimits(4, FitSignalMin, FitSignalMax);
-      fit->SetParLimits(5, sigmaMin, sigmaMax);
+      // The linear intercept and slope are free; neither is a timing parameter.
       // S returns diagnostics; N keeps ownership here and prevents automatic overlays.
       TFitResultPtr result = hist->Fit(fit, "QRS0N");
-      const double width = fit->GetParameter(5);
-      const double error = fit->GetParError(5);
-      const double mean = fit->GetParameter(4);
+      const double width = fit->GetParameter(2);
+      const double error = fit->GetParError(2);
+      const double mean = fit->GetParameter(1);
       const bool atLimit = width <= sigmaMin * 1.001 || width >= sigmaMax * 0.999 ||
           mean <= FitSignalMin + 0.001 * (FitSignalMax - FitSignalMin) ||
           mean >= FitSignalMax - 0.001 * (FitSignalMax - FitSignalMin);
       if (int(result) != 0 || !result.Get() || !result->IsValid() || result->CovMatrixStatus() < 2 ||
           !std::isfinite(width) || !std::isfinite(error) || error <= 0.0 || atLimit ||
-          fit->GetParameter(3) <= 0.0 || width >= fit->GetParameter(2)) {
-        fitReason[bar] = "No usable signal fit (convergence, covariance, limits, or unresolved components)";
+          !std::isfinite(mean) || fit->GetParameter(0) <= 0.0) {
+        fitReason[bar] = "No usable signal fit (convergence, covariance, limits, or signal amplitude)";
       } else {
         sigma[bar] = width;
         sigmaError[bar] = error;
@@ -971,10 +966,10 @@ void getBarSigma(const int numBarsAnalyze = 1, const char* configFile = "CDet_ru
       fitLabel->SetTextSize(0.025);
       if (std::isfinite(sigma[index])) {
         fitLabel->AddText(TString::Format("#sigma_{signal} = %.3f #pm %.3f ns", sigma[index], sigmaError[index]));
-        fitLabel->AddText(TString::Format("Double Gaussian; fit [%.1f, %.1f] ns", FitMin, FitMax));
+        fitLabel->AddText(TString::Format("Gaussian + linear background; fit [%.1f, %.1f] ns", FitSignalMin, FitSignalMax));
       } else {
         fitLabel->AddText("Signal #sigma unavailable");
-        fitLabel->AddText(fitReason[index].BeginsWith("Insufficient") ? "Insufficient fit-window statistics" : "No usable double-Gaussian fit; see console");
+        fitLabel->AddText(fitReason[index].BeginsWith("Insufficient") ? "Insufficient fit-window statistics" : "No usable Gaussian + linear fit; see console");
       }
       fitLabel->Draw();
     } else {
