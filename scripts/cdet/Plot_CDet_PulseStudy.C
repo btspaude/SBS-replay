@@ -117,6 +117,10 @@ TH1D* hPulseFullBarDtNoLeCut[2] = {};
 int pulseStudyRunNumber = 0;
 TString pulseStudyLoadingECalCuts;
 TString pulseStudyLoadingPulseCuts;
+// Denominator sample: every event passing the loading ECal cuts, INCLUDING
+// events with no accepted CDet pulse. These do not share the pulse-vector index.
+std::vector<double> vPulseStudyDenominatorECalE, vPulseStudyDenominatorECalTime;
+bool pulseStudyDenominatorReady = false;
 
 //-------HCal Vectors ---------
 std::vector<double> vHCalAdcTime;
@@ -150,6 +154,9 @@ std::vector<std::vector<double>> vPulseDt; //Ecal t - Cdet t
 
 void ClearPulseStudyVectors()
 {
+  vPulseStudyDenominatorECalE.clear();
+  vPulseStudyDenominatorECalTime.clear();
+  pulseStudyDenominatorReady = false;
   vHCalAdcTime.clear();
   delete gROOT->GetListOfCanvases()->FindObject("cPulseStudyECalAdcTime");
   delete hECalAdcTime;
@@ -311,6 +318,8 @@ void Plot_CDet_PulseStudy(
   TTreeReaderArray<double> PulseSpatialPass(reader, "earm.cdet.pulse.spatial_pass");
 
   vECalE.reserve(limit);
+  vPulseStudyDenominatorECalE.reserve(limit);
+  vPulseStudyDenominatorECalTime.reserve(limit);
   vECalAdcTime.reserve(limit);
   vECalX.reserve(limit);
   vECalY.reserve(limit);
@@ -351,6 +360,11 @@ void Plot_CDet_PulseStudy(
     bool good_ECal_time = std::isfinite(*ECalAdcTime) && *ECalAdcTime > ECalMinT && *ECalAdcTime < ECalMaxT;
     bool good_ECal_event = good_ECal_energy && good_ECal_time;
     if (!good_ECal_event) continue;
+
+    // Count the ECal opportunity before requiring any CDet hit. Keep energy/time
+    // so secondary cuts can be applied to this denominator as well as the pulses.
+    vPulseStudyDenominatorECalE.push_back(*ECalE);
+    vPulseStudyDenominatorECalTime.push_back(*ECalAdcTime);
 
     // Fresh pulse vectors for this event. Projections are per pulse too.
     std::vector<double> thisEventECalXProjection;
@@ -427,6 +441,9 @@ void Plot_CDet_PulseStudy(
   }
   std::cout << "[CDet pulse study] Read " << EventCounter << " events; saved "
             << vECalE.size() << " ECal-selected events.\n";
+  pulseStudyDenominatorReady = true;
+  std::cout << "  ECal denominator (including zero-hit events): "
+            << vPulseStudyDenominatorECalE.size() << '\n';
   TCanvas* cECalTime = new TCanvas("cPulseStudyECalAdcTime", TString::Format("Run %d: ECal ADC time", RunNumber), 1000, 750);
   cECalTime->SetTopMargin(0.27);
   hECalAdcTime->SetStats(false);
@@ -438,7 +455,7 @@ void Plot_CDet_PulseStudy(
   ecalCuts->SetTextFont(42);
   ecalCuts->AddText(pulseStudyLoadingECalCuts);
   ecalCuts->AddText(pulseStudyLoadingPulseCuts);
-  ecalCuts->AddText("One entry per event with at least one saved CDet pulse; no LE cut");
+  ecalCuts->AddText("One entry per event with at least one saved CDet pulse; loading LE cut applied");
   ecalCuts->Draw();
   cECalTime->Modified();
   cECalTime->Update();
@@ -694,9 +711,12 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
 // Interactive Gaussian + linear-background signal widths; run the main analysis first.
 // getBarSigma("CDet_run6077_pulse_pixel_timing.conf", "sigma_study");
 // firstBar/lastBar limit only the bar graph; the detector spectrum includes all bars.
+// The control-bar yield counts raw pulses within mean +/- PeakNSigma*sigma,
+// divided by all ECal-selected events (including zero-hit events); it is not Hz.
 void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                  const char* outputTag = nullptr, int firstBar = -1, int lastBar = -1,
-                 double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN)
+                 double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
+                 double PeakNSigma = NAN)
 {
   TEnv config;
   if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
@@ -727,6 +747,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   const double FitSignalMax = config.GetValue("pulse_study.fit_signal_max", -20.0);
   const double FitMinEntries = config.GetValue("pulse_study.min_fit_entries", 100.0);
   const double FitSigma = config.GetValue("pulse_study.fit_sigma", 5.0);
+  if (std::isnan(PeakNSigma)) PeakNSigma = config.GetValue("pulse_study.peak_nsigma", 2.0);
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
   const double ellipseXCenter = config.GetValue("good_pulse.single_residual_center_m", 0.0);
   const double ellipseTimeCenter = config.GetValue("good_pulse.single_timing_center_ns", -26.0);
@@ -743,6 +764,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       !std::isfinite(FitSignalMin) || !std::isfinite(FitSignalMax) ||
       FitSignalMin >= FitSignalMax || FitSignalMin < DtMin || FitSignalMax > DtMax ||
       !std::isfinite(FitMinEntries) || FitMinEntries <= 0.0 ||
+      !std::isfinite(PeakNSigma) || PeakNSigma <= 0.0 ||
       !std::isfinite(FitSigma) || FitSigma <= 0.0) {
     std::cerr << "[CDet bar sigma] Invalid bar, histogram, or fit settings. Fit windows must lie inside the dt display range.\n";
     return;
@@ -830,6 +852,20 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     fBarDt[bar]->SetLineColor(kRed + 1);
   }
 
+  // Apply identical secondary ECal cuts to the full denominator sample.
+  Long64_t ecalEventCount = 0;
+  const bool denominatorAvailable = pulseStudyDenominatorReady &&
+      vPulseStudyDenominatorECalE.size() == vPulseStudyDenominatorECalTime.size();
+  if (denominatorAvailable) {
+    for (size_t event = 0; event < vPulseStudyDenominatorECalE.size(); ++event) {
+      const double e = vPulseStudyDenominatorECalE[event], t = vPulseStudyDenominatorECalTime[event];
+      if (std::isfinite(e) && std::isfinite(t) &&
+          (!applyECalEnergyCut || (e > ECalMinE && e < ECalMaxE)) &&
+          (!applyECalTimeCut || (t > ECalMinT && t < ECalMaxT))) ++ecalEventCount;
+    }
+  }
+  // Retain exact control-bar dt values so the yield is not rounded to histogram bins.
+  std::vector<double> controlBarDt;
   // One pass through the aligned saved vectors. dt is already in ns.
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
@@ -868,6 +904,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       if (!good_le || !good_tot || !good_ellipse) continue;
       hBarDt[bar]->Fill(dt);
       hBarDt[numBars]->Fill(dt);
+      if (bar == controlBar) controlBarDt.push_back(dt);
       ++filledPulses;
     }//hit loop for event
   }//event loop
@@ -921,6 +958,25 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     else std::cout << fitReason[bar] << '\n';
   }
 
+  TString yieldLabel;
+  if (!denominatorAvailable) {
+    yieldLabel = "Peak yield unavailable: rerun main analysis to save all ECal events";
+  } else if (ecalEventCount == 0) {
+    yieldLabel = "Peak yield unavailable: no ECal events pass these cuts";
+  } else if (!std::isfinite(sigma[controlBar])) {
+    yieldLabel = TString::Format("Peak yield unavailable: no usable control fit; %lld ECal events", ecalEventCount);
+  } else {
+    const double mu = fBarDt[controlBar]->GetParameter(1);
+    const double peakMin = mu - PeakNSigma * sigma[controlBar];
+    const double peakMax = mu + PeakNSigma * sigma[controlBar];
+    Long64_t peakPulses = 0;
+    for (double dt : controlBarDt) if (dt >= peakMin && dt <= peakMax) ++peakPulses;
+    yieldLabel = TString::Format("Peak [%.2f, %.2f] ns: %lld / %lld = %.5g pulses/ECal event (raw)",
+        peakMin, peakMax, peakPulses, ecalEventCount, double(peakPulses) / ecalEventCount);
+  }
+  std::cout << "[CDet bar sigma] Control bar " << controlBar << ": " << yieldLabel
+            << "; window = fitted mean +/- " << PeakNSigma << " sigma.\n";
+
   double graphMax = 1.0;
   for (int bar = firstBar; bar <= lastBar; ++bar) {
     if (!std::isfinite(sigma[bar])) {
@@ -963,7 +1019,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       fitLabel->SetBit(kCanDelete);
       fitLabel->SetFillColor(kWhite);
       fitLabel->SetBorderSize(0);
-      fitLabel->SetTextSize(0.025);
+      fitLabel->SetTextSize(plot == 0 ? 0.020 : 0.025);
       if (std::isfinite(sigma[index])) {
         const int ndf = fBarDt[index]->GetNDF();
         const TString reducedChi2 = ndf > 0
@@ -975,6 +1031,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
         fitLabel->AddText("Signal #sigma unavailable");
         fitLabel->AddText(fitReason[index].BeginsWith("Insufficient") ? "Insufficient fit-window statistics" : "No usable Gaussian + linear fit; see console");
       }
+      if (plot == 0) fitLabel->AddText(yieldLabel);
       fitLabel->Draw();
     } else {
       TH1F* frame = canvas->DrawFrame(firstBar - 0.5, -0.08 * graphMax,
