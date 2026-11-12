@@ -7,11 +7,14 @@
 // Pass INFINITY for outer |rx| to accept all pulses outside the central window.
 // The replay spatial flag and dt ellipse are NOT required: keep ry explicitly,
 // replace the central rx window with the sidebands, and preserve the other cuts.
-// Fits use pulse_study.fit_min/max, not fit_signal_min/max. PDFs go to
+// Fits use pulse_study.fit_min/max, excluding bin centers in the inclusive
+// pulse_study.fit_signal_min/max interval. Full histograms remain visible.
+// Compare pol2, pol4, Gaussian, and Lorentzian backgrounds. PDFs go to
 // PusleStudy/sidebands/<tag>/; canvases remain interactive. Gaussian sigma here
 // describes the BACKGROUND shape, not signal timing resolution.
 
 #include <TCanvas.h>
+#include <TBox.h>
 #include <TChain.h>
 #include <TEnv.h>
 #include <TF1.h>
@@ -209,6 +212,8 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
   const int controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
   const double FitMin = config.GetValue("pulse_study.fit_min", -50.0);
   const double FitMax = config.GetValue("pulse_study.fit_max", 0.0);
+  const double SignalMin = config.GetValue("pulse_study.fit_signal_min", NAN);
+  const double SignalMax = config.GetValue("pulse_study.fit_signal_max", NAN);
   const double MinEntries = config.GetValue("pulse_study.min_fit_entries", 100.0);
   const double LeMin = config.GetValue("analysis.le_min", 0.02), LeMax = config.GetValue("analysis.le_max", 60.0);
   const double TotMin = config.GetValue("analysis.tot_min", 4.0), TotMax = config.GetValue("analysis.tot_max", 30.0);
@@ -221,12 +226,14 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
       !std::isfinite(BinWidth) || BinWidth <= 0 || !std::isfinite(DtMin) || !std::isfinite(DtMax) || DtMin >= DtMax ||
       !std::isfinite((DtMax-DtMin)/BinWidth) || std::ceil((DtMax-DtMin)/BinWidth) > std::numeric_limits<int>::max()-2 ||
       !std::isfinite(FitMin) || !std::isfinite(FitMax) || FitMin >= FitMax || FitMin < DtMin || FitMax > DtMax ||
+      !std::isfinite(SignalMin) || !std::isfinite(SignalMax) ||
+      SignalMin >= SignalMax || SignalMin <= FitMin || SignalMax >= FitMax ||
       !std::isfinite(MinEntries) || MinEntries <= 0 ||
       !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
       (applyToT && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0 || TotMin >= TotMax)) ||
       (applyEnergy && (!std::isfinite(Emin) || !std::isfinite(Emax) || Emin >= Emax)) ||
       (applyTime && (!std::isfinite(Tmin) || !std::isfinite(Tmax) || Tmin >= Tmax))) {
-    std::cerr << "[CDet sideband fits] Invalid plot, fit, or cut settings.\n"; return;
+    std::cerr << "[CDet sideband fits] Invalid plot, fit, or cut settings. The signal exclusion must lie strictly inside the full fit range.\n"; return;
   }
   const int nBins = int(std::ceil((DtMax-DtMin)/BinWidth));
   const double sigmaMin = 0.5*(DtMax-DtMin)/nBins, sigmaMax = 2.0*(FitMax-FitMin);
@@ -246,27 +253,30 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
   const char* canvasNames[] = {"cSidebandControlDt","cSidebandDetectorDt","cSidebandSigmaVsBar"};
   for (const char* name : canvasNames) delete gROOT->GetListOfCanvases()->FindObject(name);
   static std::vector<TH1D*> histograms(sidebandNumBars+1,nullptr);
-  static std::vector<std::vector<TF1*>> fits(sidebandNumBars+1,std::vector<TF1*>(3,nullptr));
+  const int nModels = 4;
+  static std::vector<std::vector<TF1*>> fits(sidebandNumBars+1,std::vector<TF1*>(nModels,nullptr));
   static TGraphErrors *layer1 = nullptr, *layer2 = nullptr, *unavailable = nullptr;
   delete layer1; delete layer2; delete unavailable;
   layer1 = new TGraphErrors(); layer2 = new TGraphErrors(); unavailable = new TGraphErrors();
   layer1->SetName("gSidebandSigmaL1"); layer2->SetName("gSidebandSigmaL2"); unavailable->SetName("gSidebandSigmaUnavailable");
-  const char* formulas[] = {"pol2","pol4","gaus"};
-  const char* modelNames[] = {"Quadratic","Fourth-order polynomial","Gaussian"};
-  const int colors[] = {kRed+1,kBlue+1,kGreen+2};
+  // Lorentzian parameters are peak height, center, and gamma (HWHM), not sigma.
+  const char* formulas[] = {"pol2","pol4","gaus","[0]/(1.+((x-[1])/[2])*((x-[1])/[2]))"};
+  const char* modelNames[] = {"Quadratic","Fourth-order polynomial","Gaussian","Lorentzian"};
+  const int colors[] = {kRed+1,kBlue+1,kGreen+2,kMagenta+1};
   for (int bar = 0; bar <= sidebandNumBars; ++bar) {
     delete histograms[bar];
     const TString label = bar == sidebandNumBars ? TString("Full detector") : TString::Format("Bar %d",bar);
     histograms[bar] = new TH1D(TString::Format("hSidebandDt_%d",bar),
         TString::Format("Run %d: %s sideband dt;dt = pulse.ecal_residual (ns);Pulses",sidebandRunNumber,label.Data()),nBins,DtMin,DtMax);
     histograms[bar]->SetDirectory(nullptr); histograms[bar]->SetStats(false);
-    for (int model = 0; model < 3; ++model) {
+    for (int model = 0; model < nModels; ++model) {
       delete fits[bar][model];
       fits[bar][model] = new TF1(TString::Format("fSidebandDt_%d_%d",bar,model),formulas[model],FitMin,FitMax);
       fits[bar][model]->AddToGlobalList(false);
       fits[bar][model]->SetLineColor(colors[model]);
       fits[bar][model]->SetLineStyle(model+1);
       fits[bar][model]->SetNpx(1000);
+      if (model == 3) fits[bar][model]->SetParNames("Height","Center","Gamma (HWHM)");
     }
   }
 
@@ -287,35 +297,44 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
     }
   }
 
-  // Independent alternatives fitted to the SAME bins; no signal exclusion in dt.
-  std::vector<std::vector<bool>> valid(sidebandNumBars+1,std::vector<bool>(3,false));
-  std::vector<std::vector<TString>> reasons(sidebandNumBars+1,std::vector<TString>(3));
+  // Fit the same retained bin centers/errors for each model. A temporary graph
+  // omits the signal interval without modifying the displayed histogram or the
+  // full-range TF1 overlays. Zero-error bins are omitted, as in TH1 chi-square fits.
+  std::vector<std::vector<bool>> valid(sidebandNumBars+1,std::vector<bool>(nModels,false));
+  std::vector<std::vector<TString>> reasons(sidebandNumBars+1,std::vector<TString>(nModels));
   for (int bar = 0; bar <= sidebandNumBars; ++bar) {
     TH1D* h = histograms[bar];
     double entries = 0, height = 0, sumX = 0, sumX2 = 0;
-    int occupied = 0;
+    TGraphErrors backgroundBins;
+    int leftBins = 0, rightBins = 0;
     for (int bin = 1; bin <= nBins; ++bin) {
       const double x = h->GetBinCenter(bin), n = h->GetBinContent(bin);
-      if (x < FitMin || x > FitMax) continue;
+      if (x < FitMin || x > FitMax || (x >= SignalMin && x <= SignalMax)) continue;
+      const double error = h->GetBinError(bin);
+      if (!std::isfinite(error) || error <= 0.0) continue;
+      const int point = backgroundBins.GetN();
+      backgroundBins.SetPoint(point,x,n);
+      backgroundBins.SetPointError(point,0.0,error);
+      if (x < SignalMin) ++leftBins; else ++rightBins;
       entries += n; sumX += n*x; sumX2 += n*x*x;
-      height = std::max(height,n); if (n > 0) ++occupied;
+      height = std::max(height,n);
     }
-    for (int model = 0; model < 3; ++model) {
+    for (int model = 0; model < nModels; ++model) {
       TF1* f = fits[bar][model];
-      if (entries < MinEntries || occupied <= f->GetNpar()) {
-        reasons[bar][model] = "Insufficient fit-window statistics"; continue;
+      if (entries < MinEntries || backgroundBins.GetN() <= f->GetNpar() || !leftBins || !rightBins) {
+        reasons[bar][model] = "Insufficient statistics outside signal interval"; continue;
       }
-      if (model == 2) {
+      if (model >= 2) {
         const double mu = sumX/entries;
         const double rms = std::sqrt(std::max(0.0,sumX2/entries-mu*mu));
         f->SetParameters(height,mu,std::max(sigmaMin*1.01,std::min(sigmaMax*.99,rms)));
         f->SetParLimits(0,0,10*height); f->SetParLimits(1,FitMin,FitMax); f->SetParLimits(2,sigmaMin,sigmaMax);
       }
       // B keeps Gaussian seeds/limits; polynomial coefficients use ROOT's linear fitter.
-      TFitResultPtr result = h->Fit(f,model == 2 ? "QRS0NB" : "QRS0N");
+      TFitResultPtr result = backgroundBins.Fit(f,model == 2 ? "QRS0NB" : "QRS0N");
       bool good_fit = int(result)==0 && result.Get() && result->IsValid() && result->CovMatrixStatus()>=2 && f->GetNDF()>0;
       for (int p = 0; p < f->GetNpar(); ++p) good_fit = good_fit && std::isfinite(f->GetParameter(p)) && std::isfinite(f->GetParError(p));
-      if (model == 2) {
+      if (model >= 2) {
         const double sigma = f->GetParameter(2), mu = f->GetParameter(1), tol = .001*(FitMax-FitMin);
         good_fit = good_fit && f->GetParameter(0)>0 && f->GetParError(2)>0 &&
             sigma>sigmaMin*1.001 && sigma<sigmaMax*.999 && mu>FitMin+tol && mu<FitMax-tol;
@@ -342,20 +361,27 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
   for (int plot = 0; plot < 3; ++plot) {
     TCanvas* canvas = new TCanvas(canvasNames[plot],canvasNames[plot],1200,742);
     canvas->SetCanvasSize(1200,742);
-    canvas->SetTopMargin(.43); canvas->SetBottomMargin(.12); canvas->SetLeftMargin(.10); canvas->SetRightMargin(.04);
-    TLegend* legend = new TLegend(.10,.585,.96,.715);
+    canvas->SetTopMargin(.46); canvas->SetBottomMargin(.12); canvas->SetLeftMargin(.10); canvas->SetRightMargin(.04);
+    TLegend* legend = new TLegend(.10,.555,.96,.715);
     legend->SetBit(kCanDelete); legend->SetFillColor(kWhite); legend->SetBorderSize(0); legend->SetTextSize(.022);
     if (plot < 2) {
       const int bar = plot==0 ? controlBar : sidebandNumBars;
       TH1D* h = histograms[bar];
       h->SetMaximum(std::max(1.0,1.15*h->GetMaximum())); h->Draw("HIST");
-      for (int model = 0; model < 3; ++model) {
+      TBox* excluded = new TBox(SignalMin,0.0,SignalMax,h->GetMaximum());
+      excluded->SetBit(kCanDelete);
+      excluded->SetFillColorAlpha(kGray+1,0.15);
+      excluded->SetLineColor(kGray+1);
+      excluded->Draw("SAME");
+      h->Draw("HIST SAME");
+      for (int model = 0; model < nModels; ++model) {
         TF1* f = fits[bar][model];
         TString label = modelNames[model];
         if (valid[bar][model]) {
           f->Draw("SAME");
           label += TString::Format(": #chi^{2}/ndf = %.3f (ndf = %d)",f->GetChisquare()/f->GetNDF(),f->GetNDF());
           if (model == 2) label += TString::Format("; #sigma_{background} = %.2f #pm %.2f ns",f->GetParameter(2),f->GetParError(2));
+          if (model == 3) label += TString::Format("; #gamma (HWHM) = %.2f #pm %.2f ns",f->GetParameter(2),f->GetParError(2));
         } else label += ": " + reasons[bar][model];
         legend->AddEntry(f,label,"l");
       }
@@ -370,7 +396,7 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
     legend->Draw();
     TPaveText* cuts = new TPaveText(.10,.73,.96,.94,"NDC");
     cuts->SetBit(kCanDelete); cuts->SetFillColor(kWhite); cuts->SetBorderSize(0); cuts->SetTextAlign(12); cuts->SetTextSize(.020);
-    cuts->AddText(TString::Format("Fit [%.3g, %.3g] ns; bins %.3g ns; both rx sidebands combined",FitMin,FitMax,(DtMax-DtMin)/nBins));
+    cuts->AddText(TString::Format("Fit [%.3g, %.3g] ns; exclude [%.3g, %.3g] ns (shaded); bins %.3g ns",FitMin,FitMax,SignalMin,SignalMax,(DtMax-DtMin)/nBins));
     cuts->AddText(sidebandLoadingECalCuts); cuts->AddText(sidebandLoadingPulseCuts); cuts->AddText(sidebandLoadingSpatialCuts);
     const TString energy = applyEnergy ? TString::Format("%.3g < E < %.3g GeV",Emin,Emax) : TString("energy off");
     const TString time = applyTime ? TString::Format("%.3g < t < %.3g ns",Tmin,Tmax) : TString("ADC time off");
