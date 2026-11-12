@@ -965,7 +965,11 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       fitLabel->SetBorderSize(0);
       fitLabel->SetTextSize(0.025);
       if (std::isfinite(sigma[index])) {
-        fitLabel->AddText(TString::Format("#sigma_{signal} = %.3f #pm %.3f ns", sigma[index], sigmaError[index]));
+        const int ndf = fBarDt[index]->GetNDF();
+        const TString reducedChi2 = ndf > 0
+            ? TString::Format("#chi^{2}/ndf = %.3f (ndf = %d)", fBarDt[index]->GetChisquare() / ndf, ndf)
+            : TString("#chi^{2}/ndf unavailable (ndf #leq 0)");
+        fitLabel->AddText(TString::Format("#sigma_{signal} = %.3f #pm %.3f ns; %s", sigma[index], sigmaError[index], reducedChi2.Data()));
         fitLabel->AddText(TString::Format("Gaussian + linear background; fit [%.1f, %.1f] ns", FitSignalMin, FitSignalMax));
       } else {
         fitLabel->AddText("Signal #sigma unavailable");

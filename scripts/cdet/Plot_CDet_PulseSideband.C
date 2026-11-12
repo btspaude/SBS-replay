@@ -354,7 +354,7 @@ void getSigmaBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf
         TString label = modelNames[model];
         if (valid[bar][model]) {
           f->Draw("SAME");
-          label += TString::Format(": #chi^{2}/ndf = %.1f/%d",f->GetChisquare(),f->GetNDF());
+          label += TString::Format(": #chi^{2}/ndf = %.3f (ndf = %d)",f->GetChisquare()/f->GetNDF(),f->GetNDF());
           if (model == 2) label += TString::Format("; #sigma_{background} = %.2f #pm %.2f ns",f->GetParameter(2),f->GetParError(2));
         } else label += ": " + reasons[bar][model];
         legend->AddEntry(f,label,"l");
