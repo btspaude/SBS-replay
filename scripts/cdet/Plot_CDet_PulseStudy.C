@@ -730,13 +730,15 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
 
 // Interactive Gaussian + linear-background signal widths; run the main analysis first.
 // getBarSigma("CDet_run6077_pulse_pixel_timing.conf", "sigma_study");
-// firstBar/lastBar limit only the bar graph; the detector spectrum includes all bars.
-// The control-bar yield counts raw pulses within mean +/- PeakNSigma*sigma,
+// getBarSigma("this.conf", "bar30_y", true); // optional bar-30 y correction
+// firstBar/lastBar limit only the bar graphs; the detector spectrum includes all bars.
+// Each bar yield counts raw pulses within its fitted mean +/- PeakNSigma*sigma,
 // divided by all ECal-selected events (including zero-hit events); it is not Hz.
 void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                  const char* outputTag = nullptr, int firstBar = -1, int lastBar = -1,
                  double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
-                 double PeakNSigma = NAN)
+                 double PeakNSigma = NAN, bool ApplyYCorrection = false,
+                 double YCorrectionRefractiveIndex = NAN)
 {
   TEnv config;
   if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
@@ -768,6 +770,16 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   const double FitMinEntries = config.GetValue("pulse_study.min_fit_entries", 100.0);
   const double FitSigma = config.GetValue("pulse_study.fit_sigma", 5.0);
   if (std::isnan(PeakNSigma)) PeakNSigma = config.GetValue("pulse_study.peak_nsigma", 2.0);
+  // Same initial propagation model as the existing y-timing diagnostics.
+  // Bar 30 is on the left readout side: b_LE = -n/c (ns/m).
+  const int yCorrectionBar = 30;
+  if (std::isnan(YCorrectionRefractiveIndex))
+    YCorrectionRefractiveIndex = config.GetValue("pulse_study.y_correction_refractive_index", 1.59);
+  const double ySlope = -YCorrectionRefractiveIndex / 0.299792458;
+  if (ApplyYCorrection && (!std::isfinite(ySlope) || YCorrectionRefractiveIndex <= 0.0)) {
+    std::cerr << "[CDet bar sigma] Y correction requires a finite, positive refractive index.\n";
+    return;
+  }
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
   const double ellipseXCenter = config.GetValue("good_pulse.single_residual_center_m", 0.0);
   const double ellipseTimeCenter = config.GetValue("good_pulse.single_timing_center_ns", -26.0);
@@ -804,6 +816,23 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     std::cerr << "[CDet bar sigma] No saved pulse events; run the main macro first.\n";
     return;
   }
+  // Do not partially correct a sample if the required saved geometry is missing.
+  // With the switch off, these vectors are not required or accessed.
+  if (ApplyYCorrection) {
+    for (size_t event = 0; event < vPulseID.size(); ++event) {
+      for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
+        const double id = vPulseID[event][hit];
+        if (!std::isfinite(id) || id < yCorrectionBar * pixelsPerBar ||
+            id >= (yCorrectionBar + 1) * pixelsPerBar || std::floor(id) != id) continue;
+        if (event >= vPulseY.size() || event >= vECalYProjection.size() ||
+            hit >= vPulseY[event].size() || hit >= vECalYProjection[event].size() ||
+            !std::isfinite(vPulseY[event][hit]) || !std::isfinite(vECalYProjection[event][hit])) {
+          std::cerr << "[CDet bar sigma] Missing/nonfinite bar-30 DB y or projected ECal y; rerun the main analysis.\n";
+          return;
+        }
+      }
+    }
+  }
   const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
   const double fitSpan = FitSignalMax - FitSignalMin;
   const double sigmaMin = 0.5 * (DtMax - DtMin) / nDtBins;
@@ -833,7 +862,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   const int RunNumber = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
 
   // Clear the previous call before replacing the histograms/functions it displayed.
-  const char* canvasNames[] = {"cPulseSigmaControl", "cPulseSigmaDetector", "cPulseSigmaVsBar"};
+  const char* canvasNames[] = {"cPulseSigmaControl", "cPulseSigmaDetector", "cPulseSigmaVsBar", "cPulsePeakYieldVsBar"};
   for (const char* name : canvasNames) delete gROOT->GetListOfCanvases()->FindObject(name);
   static std::vector<TH1D*> hBarDt(numBars + 1, nullptr);
   static std::vector<TF1*> fBarDt(numBars + 1, nullptr);
@@ -851,17 +880,29 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   gSigmaLayer2->SetName("gPulseSigmaLayer2");
   gSigmaUnavailable->SetName("gPulseSigmaUnavailable");
 
+  static TGraphErrors *gYieldLayer1 = nullptr, *gYieldLayer2 = nullptr, *gYieldUnavailable = nullptr;
+  delete gYieldLayer1; delete gYieldLayer2; delete gYieldUnavailable;
+  gYieldLayer1 = new TGraphErrors();
+  gYieldLayer2 = new TGraphErrors();
+  gYieldUnavailable = new TGraphErrors();
+  gYieldLayer1->SetName("gPulsePeakYieldLayer1");
+  gYieldLayer2->SetName("gPulsePeakYieldLayer2");
+  gYieldUnavailable->SetName("gPulsePeakYieldUnavailable");
+
   // The last slot is the full detector; all earlier slots are individual bars.
   // Fit parameters: signal amplitude/mean/sigma, then background intercept/slope.
   for (int bar = 0; bar <= numBars; ++bar) {
     delete hBarDt[bar];
     delete fBarDt[bar];
     delete fBarBackgroundDt[bar];
-    const TString title = bar == numBars
+    TString title = bar == numBars
         ? TString::Format("%s: full-detector dt", PulseStudyRunLabel(config, RunNumber).Data())
         : TString::Format("%s: bar %d dt", PulseStudyRunLabel(config, RunNumber).Data(), bar);
+    if (ApplyYCorrection && (bar == yCorrectionBar || bar == numBars))
+      title += " (bar 30 y correction on)";
     hBarDt[bar] = new TH1D(TString::Format("hPulseSigmaDt_%d", bar),
-        title + ";dt = pulse.ecal_residual (ns);Pulses", nDtBins, DtMin, DtMax);
+        title + (ApplyYCorrection && (bar == yCorrectionBar || bar == numBars)
+            ? ";dt (ns), bar 30 y-corrected;Pulses" : ";dt = pulse.ecal_residual (ns);Pulses"), nDtBins, DtMin, DtMax);
     hBarDt[bar]->SetDirectory(nullptr);
     hBarDt[bar]->SetStats(false);
     fBarDt[bar] = new TF1(TString::Format("fPulseSigmaDt_%d", bar),
@@ -884,8 +925,8 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
           (!applyECalTimeCut || (t > ECalMinT && t < ECalMaxT))) ++ecalEventCount;
     }
   }
-  // Retain exact control-bar dt values so the yield is not rounded to histogram bins.
-  std::vector<double> controlBarDt;
+  // Retain exact per-bar dt values so peak counts are not rounded to histogram bins.
+  std::vector<std::vector<double>> barDt(numBars);
   // One pass through the aligned saved vectors. dt is already in ns.
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
@@ -922,9 +963,14 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
         good_ellipse = good_x_res;
       }
       if (!good_le || !good_tot || !good_ellipse) continue;
-      hBarDt[bar]->Fill(dt);
-      hBarDt[numBars]->Fill(dt);
-      if (bar == controlBar) controlBarDt.push_back(dt);
+      // Selection above always uses the original branch dt and raw LE.
+      // LE_y = LE_corr - b_LE*(y_projected - y_DB), hence dt_y = dt + b_LE*dy.
+      // The saved projection already uses each pulse's CDet z: y_ECal*z_CDet/z_ECal.
+      const double plotDt = ApplyYCorrection && bar == yCorrectionBar
+          ? dt + ySlope * (vECalYProjection[event][hit] - vPulseY[event][hit]) : dt;
+      hBarDt[bar]->Fill(plotDt);
+      hBarDt[numBars]->Fill(plotDt);
+      barDt[bar].push_back(plotDt);
       ++filledPulses;
     }//hit loop for event
   }//event loop
@@ -978,24 +1024,51 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     else std::cout << fitReason[bar] << '\n';
   }
 
-  TString yieldLabel;
-  if (!denominatorAvailable) {
-    yieldLabel = "Peak yield unavailable: rerun main analysis to save all ECal events";
-  } else if (ecalEventCount == 0) {
-    yieldLabel = "Peak yield unavailable: no ECal events pass these cuts";
-  } else if (!std::isfinite(sigma[controlBar])) {
-    yieldLabel = TString::Format("Peak yield unavailable: no usable control fit; %lld ECal events", ecalEventCount);
-  } else {
-    const double mu = fBarDt[controlBar]->GetParameter(1);
-    const double peakMin = mu - PeakNSigma * sigma[controlBar];
-    const double peakMax = mu + PeakNSigma * sigma[controlBar];
-    Long64_t peakPulses = 0;
-    for (double dt : controlBarDt) if (dt >= peakMin && dt <= peakMax) ++peakPulses;
-    yieldLabel = TString::Format("Peak [%.2f, %.2f] ns: %lld / %lld = %.5g pulses/ECal event (raw)",
-        peakMin, peakMax, peakPulses, ecalEventCount, double(peakPulses) / ecalEventCount);
+  // Use one common ECal opportunity count, including events with zero CDet hits.
+  // These are raw peak-window yields: no background subtraction or conversion to Hz.
+  std::vector<double> peakYield(numBars, NAN);
+  std::vector<TString> yieldLabels(numBars);
+  for (int bar = 0; bar < numBars; ++bar) {
+    if (!denominatorAvailable) {
+      yieldLabels[bar] = "Peak yield unavailable: rerun main analysis to save all ECal events";
+    } else if (ecalEventCount == 0) {
+      yieldLabels[bar] = "Peak yield unavailable: no ECal events pass these cuts";
+    } else if (!std::isfinite(sigma[bar])) {
+      yieldLabels[bar] = TString::Format("Peak yield unavailable: no usable bar fit; %lld ECal events", ecalEventCount);
+    } else {
+      const double mu = fBarDt[bar]->GetParameter(1);
+      const double peakMin = mu - PeakNSigma * sigma[bar];
+      const double peakMax = mu + PeakNSigma * sigma[bar];
+      Long64_t peakPulses = 0;
+      for (double dt : barDt[bar]) if (dt >= peakMin && dt <= peakMax) ++peakPulses;
+      peakYield[bar] = double(peakPulses) / ecalEventCount;
+      yieldLabels[bar] = TString::Format("Peak [%.2f, %.2f] ns: %lld / %lld = %.5g pulses/ECal event (raw)",
+          peakMin, peakMax, peakPulses, ecalEventCount, peakYield[bar]);
+      std::cout << "[CDet bar yield] Bar " << bar << ": " << yieldLabels[bar] << '\n';
+    }
   }
+  const TString yieldLabel = yieldLabels[controlBar];
   std::cout << "[CDet bar sigma] Control bar " << controlBar << ": " << yieldLabel
             << "; window = fitted mean +/- " << PeakNSigma << " sigma.\n";
+
+  double yieldGraphMax = 0.0;
+  for (int bar = firstBar; bar <= lastBar; ++bar) {
+    if (!std::isfinite(peakYield[bar])) {
+      gYieldUnavailable->SetPoint(gYieldUnavailable->GetN(), bar, 0.0);
+      continue;
+    }
+    TGraphErrors* graph = bar < numBars / 2 ? gYieldLayer1 : gYieldLayer2;
+    graph->SetPoint(graph->GetN(), bar, peakYield[bar]);
+    yieldGraphMax = std::max(yieldGraphMax, peakYield[bar]);
+  }
+  if (yieldGraphMax <= 0.0) yieldGraphMax = 1.0;
+  gYieldLayer1->SetMarkerColor(kRed); gYieldLayer1->SetLineColor(kRed);
+  gYieldLayer2->SetMarkerColor(kBlue); gYieldLayer2->SetLineColor(kBlue);
+  gYieldUnavailable->SetMarkerColor(kBlack); gYieldUnavailable->SetLineColor(kBlack);
+  for (TGraphErrors* graph : {gYieldLayer1, gYieldLayer2, gYieldUnavailable}) {
+    graph->SetMarkerStyle(20);
+    graph->SetMarkerSize(0.85);
+  }
 
   double graphMax = 1.0;
   for (int bar = firstBar; bar <= lastBar; ++bar) {
@@ -1023,7 +1096,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   // Separate interactive canvases, each with width/height = the golden ratio.
   const int canvasWidth = 1200;
   const int canvasHeight = int(std::lround(canvasWidth / ((1.0 + std::sqrt(5.0)) / 2.0)));
-  for (int plot = 0; plot < 3; ++plot) {
+  for (int plot = 0; plot < 4; ++plot) {
     TCanvas* canvas = new TCanvas(canvasNames[plot], canvasNames[plot], canvasWidth, canvasHeight);
     canvas->SetCanvasSize(canvasWidth, canvasHeight);
     canvas->SetTopMargin(0.39);
@@ -1053,7 +1126,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       }
       if (plot == 0) fitLabel->AddText(yieldLabel);
       fitLabel->Draw();
-    } else {
+    } else if (plot == 2) {
       TH1F* frame = canvas->DrawFrame(firstBar - 0.5, -0.08 * graphMax,
           lastBar + 0.5, 1.25 * graphMax,
           TString::Format("%s: signal Gaussian width by bar;Bar number (global, zero-based);#sigma_{signal} (ns)", PulseStudyRunLabel(config, RunNumber).Data()));
@@ -1070,6 +1143,22 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       legend->AddEntry(gSigmaLayer1, "Layer 1 (bars 0-83)", "pe");
       legend->AddEntry(gSigmaLayer2, "Layer 2 (bars 84-167)", "pe");
       legend->AddEntry(gSigmaUnavailable, "Insufficient statistics / unusable fit (shown at 0)", "p");
+      legend->Draw();
+    } else {
+      TH1F* frame = canvas->DrawFrame(firstBar - 0.5, -0.08 * yieldGraphMax,
+          lastBar + 0.5, 1.25 * yieldGraphMax,
+          TString::Format("%s: peak pulse yield by bar;Bar number (global, zero-based);Peak pulses / ECal-selected event",
+              PulseStudyRunLabel(config, RunNumber).Data()));
+      frame->SetStats(false);
+      gYieldLayer1->Draw("P SAME");
+      gYieldLayer2->Draw("P SAME");
+      gYieldUnavailable->Draw("P SAME");
+      TLegend* legend = new TLegend(0.10, 0.625, 0.96, 0.715);
+      legend->SetBit(kCanDelete); legend->SetBorderSize(0); legend->SetFillColor(kWhite);
+      legend->SetTextSize(0.022); legend->SetNColumns(2);
+      legend->AddEntry(gYieldLayer1, "Layer 1 (bars 0-83)", "p");
+      legend->AddEntry(gYieldLayer2, "Layer 2 (bars 84-167)", "p");
+      legend->AddEntry(gYieldUnavailable, "Unavailable fit/denominator (marked at 0, not measured zero)", "p");
       legend->Draw();
     }
 
@@ -1093,17 +1182,38 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
         ? TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g^{2} (m, ns)",
             ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius)
         : TString::Format("|rx| #leq %.3g m; ellipse off", xRes));
+    if (ApplyYCorrection) {
+      cuts->SetTextSize(0.019);
+      cuts->AddText(TString::Format("Bar 30 only: dt_{y} = dt %+.4g (y_{proj}-y_{DB}); n = %.3g (ns, m)", ySlope, YCorrectionRefractiveIndex));
+      cuts->AddText("Selections use original dt/raw LE; other bars unchanged");
+    }
+    if (plot == 3) {
+      cuts->SetTextSize(ApplyYCorrection ? 0.016 : 0.019);
+      cuts->AddText(TString::Format("Each bar: fitted #mu #pm %.3g#sigma; raw counts, background included; not Hz", PeakNSigma));
+      cuts->AddText(!denominatorAvailable ? TString("Denominator unavailable: rerun main analysis") :
+          TString::Format("Common denominator: %lld ECal-selected events (includes zero CDet hits)", ecalEventCount));
+    }
     cuts->Draw();
     canvas->Modified();
     canvas->Update();
     const TString filename = plot == 0 ? TString::Format("bar%03d_control_dt_sigma.pdf", controlBar)
-        : TString(plot == 1 ? "detector_dt_sigma.pdf" : "sigma_vs_bar.pdf");
+        : TString(plot == 1 ? "detector_dt_sigma.pdf" : plot == 2 ? "sigma_vs_bar.pdf" : "peak_yield_vs_bar.pdf");
     canvas->SaveAs(outputDirectory + "/" + filename);
   }
-  std::cout << "[CDet bar sigma] Selected " << filledPulses << " pulses; saved three PDFs under " << outputDirectory << '\n';
+  std::cout << "[CDet bar sigma] Selected " << filledPulses << " pulses; saved four PDFs under " << outputDirectory << '\n';
+  if (ApplyYCorrection) std::cout << "[CDet bar sigma] Bar 30 y correction on: n=" << YCorrectionRefractiveIndex
+      << ", b_LE=" << ySlope << " ns/m; original selections and saved vectors preserved.\n";
   if (useEllipse) std::cout << "[CDet bar sigma] The dt-dependent ellipse can narrow the measured spectra.\n";
 
 }//end getBarSigma macro
+
+// Convenient opt-in call; existing numeric firstBar/lastBar calls keep their meaning.
+void getBarSigma(const char* configFile, const char* outputTag, bool ApplyYCorrection,
+                 double YCorrectionRefractiveIndex = NAN)
+{
+  getBarSigma(configFile, outputTag, -1, -1, NAN, NAN, NAN, NAN,
+              ApplyYCorrection, YCorrectionRefractiveIndex);
+}
 
 
 // Interactive plots for the study/control bars: one spectrum or 4x4 grid per canvas.
