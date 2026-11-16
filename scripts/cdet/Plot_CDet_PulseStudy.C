@@ -52,6 +52,22 @@
 
 #include "CDetRunDataset.h"
 
+// Display-only target label. Run numbers and output filenames stay numeric.
+TString PulseStudyRunLabel(TEnv& config, int runNumber)
+{
+  TString target = config.GetValue("analysis.target", "");
+  target = target.Strip(TString::kBoth);
+  TString normalized = target;
+  normalized.ToLower();
+  normalized.ReplaceAll("_", " ");
+  normalized.ReplaceAll("-", " ");
+  if (normalized == "lh2") target = "LH2";
+  else if (normalized == "cross target") target = "Cross target";
+  TString label = TString::Format("Run %d", runNumber);
+  if (!target.IsNull()) label += " (" + target + ")";
+  return label;
+}
+
 // One element per ECal-selected event with at least one selected CDet pulse.
 // All pulse vectors share [event][hit].
 
@@ -291,7 +307,7 @@ void Plot_CDet_PulseStudy(
   pulseStudyRunNumber = RunNumber;
   pulseStudyLoadingECalCuts = TString::Format("Loading: %.3g < E_{ECal} < %.3g GeV, %.3g < t_{ECal} < %.3g ns", ECalMinE, ECalMaxE, ECalMinT, ECalMaxT);
   pulseStudyLoadingPulseCuts = TString::Format("Loading: %.3g < ToT < %.3g ns; %.3g < LE < %.3g ns; eligible, spatial, calib flags", TotMin, TotMax, LeMin, LeMax);
-  hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("Run %d: ECal ADC time, saved events;ECal ADC time (ns);Events", RunNumber), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
+  hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("%s: ECal ADC time, saved events;ECal ADC time (ns);Events", PulseStudyRunLabel(config, RunNumber).Data()), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
   hECalAdcTime->SetDirectory(nullptr);
 
   // 3. SET YOUR TTREEREADERS HERE, before the event loop.
@@ -448,7 +464,7 @@ void Plot_CDet_PulseStudy(
   pulseStudyDenominatorReady = true;
   std::cout << "  ECal denominator (including zero-hit events): "
             << vPulseStudyDenominatorECalE.size() << '\n';
-  TCanvas* cECalTime = new TCanvas("cPulseStudyECalAdcTime", TString::Format("Run %d: ECal ADC time", RunNumber), 1000, 750);
+  TCanvas* cECalTime = new TCanvas("cPulseStudyECalAdcTime", TString::Format("%s: ECal ADC time", PulseStudyRunLabel(config, RunNumber).Data()), 1000, 750);
   cECalTime->SetTopMargin(0.27);
   hECalAdcTime->SetStats(false);
   hECalAdcTime->Draw("HIST");
@@ -842,8 +858,8 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     delete fBarDt[bar];
     delete fBarBackgroundDt[bar];
     const TString title = bar == numBars
-        ? TString::Format("Run %d: full-detector dt", RunNumber)
-        : TString::Format("Run %d: bar %d dt", RunNumber, bar);
+        ? TString::Format("%s: full-detector dt", PulseStudyRunLabel(config, RunNumber).Data())
+        : TString::Format("%s: bar %d dt", PulseStudyRunLabel(config, RunNumber).Data(), bar);
     hBarDt[bar] = new TH1D(TString::Format("hPulseSigmaDt_%d", bar),
         title + ";dt = pulse.ecal_residual (ns);Pulses", nDtBins, DtMin, DtMax);
     hBarDt[bar]->SetDirectory(nullptr);
@@ -1040,7 +1056,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     } else {
       TH1F* frame = canvas->DrawFrame(firstBar - 0.5, -0.08 * graphMax,
           lastBar + 0.5, 1.25 * graphMax,
-          TString::Format("Run %d: signal Gaussian width by bar;Bar number (global, zero-based);#sigma_{signal} (ns)", RunNumber));
+          TString::Format("%s: signal Gaussian width by bar;Bar number (global, zero-based);#sigma_{signal} (ns)", PulseStudyRunLabel(config, RunNumber).Data()));
       frame->SetStats(false);
       gSigmaLayer1->Draw("P SAME");
       gSigmaLayer2->Draw("P SAME");
@@ -1063,7 +1079,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     cuts->SetBorderSize(0);
     cuts->SetTextAlign(12);
     cuts->SetTextSize(0.022);
-    cuts->AddText(TString::Format("Run %d | %s | dt bin width %.3g ns", RunNumber,
+    cuts->AddText(TString::Format("%s | %s | dt bin width %.3g ns", PulseStudyRunLabel(config, RunNumber).Data(),
         plot == 0 ? TString::Format("Control bar %d", controlBar).Data() : plot == 1 ? "Full detector" : "All selected bars",
         hBarDt[controlBar]->GetBinWidth(1)));
     cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts);
@@ -1239,10 +1255,10 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   // Define all histograms before filling. Display limits are not additional cuts.
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
-    hPulseBarDtVsTot[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTot", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, secondary ToT cut %s;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar, applyToTCut ? "applied" : "off"), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
-    hPulseBarDtVsTotNoTotCut[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTotNoTotCut", roles[selected]), TString::Format("Run %d, bar %d: dt versus ToT, before secondary ToT cut;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
-    hPulseFullBarDtAllCuts[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtAllCuts", roles[selected]), TString::Format("Run %d, bar %d: dt with LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
-    hPulseFullBarDtNoLeCut[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtNoLeCut", roles[selected]), TString::Format("Run %d, bar %d: dt without LE cut;Stored pulse.ecal_residual (ns);Pulses", RunNumber, bar), nDtBins, DtMin, DtMax);
+    hPulseBarDtVsTot[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTot", roles[selected]), TString::Format("%s, bar %d: dt versus ToT, secondary ToT cut %s;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bar, applyToTCut ? "applied" : "off"), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
+    hPulseBarDtVsTotNoTotCut[selected] = new TH2D(TString::Format("hPulseSummary%sBarDtVsTotNoTotCut", roles[selected]), TString::Format("%s, bar %d: dt versus ToT, before secondary ToT cut;ToT (ns);Stored pulse.ecal_residual (ns);Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bar), nTotBins, TotDisplayMin, TotDisplayMax, nDtBins, DtMin, DtMax);
+    hPulseFullBarDtAllCuts[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtAllCuts", roles[selected]), TString::Format("%s, bar %d: dt with LE cut;Stored pulse.ecal_residual (ns);Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bar), nDtBins, DtMin, DtMax);
+    hPulseFullBarDtNoLeCut[selected] = new TH1D(TString::Format("hPulseSummary%sFullBarDtNoLeCut", roles[selected]), TString::Format("%s, bar %d: dt without LE cut;Stored pulse.ecal_residual (ns);Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bar), nDtBins, DtMin, DtMax);
     hPulseBarDtVsTot[selected]->SetDirectory(nullptr);
     hPulseBarDtVsTotNoTotCut[selected]->SetDirectory(nullptr);
     hPulseFullBarDtAllCuts[selected]->SetDirectory(nullptr);
@@ -1347,32 +1363,56 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       if (good_le && good_tot) ++filledPulses;
     }
   }
-  // Thirteen canvases per bar; compare LE cuts on top and secondary ToT cuts below.
+  // Thirteen canvases per bar; overlay LE cuts on top and compare secondary ToT cuts below.
   for (int selected = 0; selected < 2; ++selected) {
-    TCanvas* cComparison = new TCanvas(TString::Format("cPulseSummary%sCutComparison", roles[selected]), TString::Format("Run %d, %s bar %d: LE and ToT cut comparison", RunNumber, roles[selected], bars[selected]), 1600, 1400);
-    cComparison->Divide(2, 2);
-    TH1* comparisonHistograms[] = {hPulseFullBarDtAllCuts[selected], hPulseFullBarDtNoLeCut[selected], hPulseBarDtVsTotNoTotCut[selected], hPulseBarDtVsTot[selected]};
+    TCanvas* cComparison = new TCanvas(TString::Format("cPulseSummary%sCutComparison", roles[selected]), TString::Format("%s, %s bar %d: LE and ToT cut comparison", PulseStudyRunLabel(config, RunNumber).Data(), roles[selected], bars[selected]), 1600, 1400);
+    // One wide dt overlay above the two ToT comparison panels.
+    for (int panel = 0; panel < 3; ++panel) {
+      const double x1 = panel == 2 ? 0.50 : 0.0;
+      const double x2 = panel == 1 ? 0.50 : 1.0;
+      TPad* pad = new TPad(TString::Format("pulseCutComparison%s%d", roles[selected], panel), "",
+          x1, panel == 0 ? 0.50 : 0.0, x2, panel == 0 ? 1.0 : 0.50);
+      pad->SetNumber(panel + 1);
+      pad->Draw();
+    }
+    TH1* comparisonHistograms[] = {hPulseFullBarDtNoLeCut[selected], hPulseBarDtVsTotNoTotCut[selected], hPulseBarDtVsTot[selected]};
     const double dtMaximum = 1.15 * std::max(1.0, std::max(hPulseFullBarDtAllCuts[selected]->GetMaximum(), hPulseFullBarDtNoLeCut[selected]->GetMaximum()));
     const double dtVsTotMaximum = std::max(1.0, std::max(hPulseBarDtVsTotNoTotCut[selected]->GetMaximum(), hPulseBarDtVsTot[selected]->GetMaximum()));
     TPaveText* fullCutLabel = nullptr;
-    for (int panel = 0; panel < 4; ++panel) {
+    for (int panel = 0; panel < 3; ++panel) {
       cComparison->cd(panel + 1);
       gPad->SetTopMargin(0.39);
       gPad->SetLeftMargin(0.13);
-      gPad->SetRightMargin(panel >= 2 ? 0.16 : 0.05);
+      gPad->SetRightMargin(panel > 0 ? 0.16 : 0.05);
       TH1* histogram = comparisonHistograms[panel];
       histogram->SetStats(false);
-      if (panel < 2) {
-        histogram->SetMinimum(0.0);
+      histogram->SetMinimum(0.0);
+      if (panel == 0) {
+        histogram->SetTitle(TString::Format("%s, bar %d: dt before/after secondary raw-LE cut;Stored pulse.ecal_residual (ns);Pulses",
+            PulseStudyRunLabel(config, RunNumber).Data(), bars[selected]));
         histogram->SetMaximum(dtMaximum);
         histogram->SetLineWidth(2);
-        histogram->SetLineColor(panel == 0 ? kBlue + 1 : kRed + 1);
+        histogram->SetLineColor(kRed + 1);
+        histogram->Draw("HIST");
+        TH1D* after = hPulseFullBarDtAllCuts[selected];
+        after->SetStats(false);
+        after->SetLineWidth(2);
+        after->SetLineColor(kBlue + 1);
+        after->SetLineStyle(2);
+        after->Draw("HIST SAME");
+        TLegend* legend = new TLegend(0.66, 0.75, 0.94, 0.90);
+        legend->SetBit(kCanDelete);
+        legend->SetFillColor(kWhite);
+        legend->SetBorderSize(0);
+        legend->SetTextSize(0.028);
+        legend->AddEntry(histogram, "Before secondary raw-LE cut", "l");
+        legend->AddEntry(after, "After secondary raw-LE cut", "l");
+        legend->Draw();
       } else {
-        histogram->SetMinimum(0.0);
         histogram->SetMaximum(dtVsTotMaximum);
+        histogram->Draw("COLZ");
       }
-      histogram->Draw(panel >= 2 ? "COLZ" : "HIST");
-      TPaveText* cuts = new TPaveText(0.10, 0.63, 0.94, 0.93, "NDC");
+      TPaveText* cuts = new TPaveText(0.10, 0.63, panel == 0 ? 0.63 : 0.94, 0.93, "NDC");
       cuts->SetName("pulseStudyCuts");
       cuts->SetBit(kCanDelete);
       cuts->SetFillColor(kWhite);
@@ -1380,12 +1420,12 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       cuts->SetTextAlign(12);
       cuts->SetTextFont(42);
       cuts->SetTextSize(0.025);
-      cuts->AddText(TString::Format("Run %d; %s bar %d; all pixels", RunNumber, roles[selected], bars[selected]));
+      cuts->AddText(TString::Format("%s; %s bar %d; all pixels", PulseStudyRunLabel(config, RunNumber).Data(), roles[selected], bars[selected]));
       cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
       cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
       cuts->AddText(applyECalEnergyCut ? TString::Format("Secondary: %.3g < E_{ECal} < %.3g GeV", ECalMinE, ECalMaxE) : TString("Secondary ECal energy cut: off"));
       cuts->AddText(applyECalTimeCut ? TString::Format("Secondary: %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT) : TString("Secondary ECal time cut: off"));
-      cuts->AddText(panel == 2 ? TString("Before secondary ToT window; finite ToT > 0 required") :
+      cuts->AddText(panel == 1 ? TString("Before secondary ToT window; finite ToT > 0 required") :
           (applyToTCut ? TString::Format("Secondary: %.3g #leq ToT #leq %.3g ns", TotMin, TotMax) : TString("Secondary ToT window: off; finite ToT > 0 required")));
       if (useEllipse) {
         cuts->AddText(TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g", ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius * ellipseRadius));
@@ -1393,9 +1433,9 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       } else {
         cuts->AddText(TString::Format("|rx| #leq %.3g m; ellipse off; finite dt/rx required", xRes));
       }
-      cuts->AddText(panel == 1 ? TString("Raw LE cut: off (all other cuts unchanged)") : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
+      cuts->AddText(panel == 0 ? TString::Format("Raw LE: red = before; blue = after %.3g #leq LE #leq %.3g ns (loading cut remains)", LeMin, LeMax) : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
       cuts->Draw();
-      if (panel == 0) fullCutLabel = cuts; // Same selection as the plots below.
+      if (panel == 2) fullCutLabel = cuts; // Same selection as the plots below.
     }
     cComparison->Modified();
     cComparison->Update();
