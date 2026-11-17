@@ -30,6 +30,7 @@
 #include <TLatex.h>
 #include <TLegend.h>
 #include <TList.h>
+#include <TLine.h>
 #include <TROOT.h>
 #include <TPad.h>
 #include <TPaveStats.h>
@@ -120,6 +121,8 @@ TH2D* hPulseSummaryPixelLeVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseSummaryPixelLeCorrVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseBarDtVsRx[2] = {nullptr, nullptr};
 TH2D* hPulsePixelDtVsRx[2][pixelsPerBar] = {};
+// Fixed bar-30 ECal-time correlations: 0 = raw LE, 1 = replay-corrected LE.
+TH2D* hPulseBar30LeVsECalTime[2] = {};
 // Separate position-overlay histograms: index 0 = study bar, 1 = control bar.
 TH1D* hPulsePositionBarX[2] = {};
 TH1D* hPulsePositionBarRx[2] = {};
@@ -1093,6 +1096,32 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     graph->SetMarkerSize(0.85);
   }
 
+  // Inverse-variance average of usable individual-bar widths in the plotted range.
+  // The detector-sum fit and failed-fit zero placeholders are not measurements here.
+  int weightedBars = 0;
+  double errorScale = std::numeric_limits<double>::infinity();
+  for (int bar = firstBar; bar <= lastBar; ++bar)
+    if (std::isfinite(sigma[bar]) && std::isfinite(sigmaError[bar]) && sigmaError[bar] > 0.0)
+      errorScale = std::min(errorScale, sigmaError[bar]);
+  double weightSum = 0.0, weightedSigmaSum = 0.0;
+  for (int bar = firstBar; bar <= lastBar; ++bar) {
+    if (!std::isfinite(sigma[bar]) || !std::isfinite(sigmaError[bar]) || sigmaError[bar] <= 0.0) continue;
+    // A common rescaling preserves 1/error^2 weights without overflowing them.
+    const double relativeError = errorScale / sigmaError[bar];
+    const double weight = relativeError * relativeError;
+    weightSum += weight;
+    weightedSigmaSum += weight * sigma[bar];
+    ++weightedBars;
+  }
+  const double weightedSigma = weightedBars > 0 ? weightedSigmaSum / weightSum : NAN;
+  const double weightedSigmaError = weightedBars > 0 ? errorScale / std::sqrt(weightSum) : NAN;
+  const TString weightedSigmaLabel = weightedBars > 0
+      ? TString::Format("Weighted mean #sigma = %.4f #pm %.4f ns (%d valid bars, range %d-%d)",
+          weightedSigma, weightedSigmaError, weightedBars, firstBar, lastBar)
+      : TString::Format("Weighted mean #sigma unavailable: no usable fits in bars %d-%d", firstBar, lastBar);
+  std::cout << "[CDet bar sigma] " << weightedSigmaLabel
+            << "; inverse-variance weights; uncertainty assumes independent bar-fit errors.\n";
+
   // Separate interactive canvases, each with width/height = the golden ratio.
   const int canvasWidth = 1200;
   const int canvasHeight = int(std::lround(canvasWidth / ((1.0 + std::sqrt(5.0)) / 2.0)));
@@ -1134,6 +1163,15 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       gSigmaLayer1->Draw("P SAME");
       gSigmaLayer2->Draw("P SAME");
       gSigmaUnavailable->Draw("P SAME");
+      TLine* averageLine = nullptr;
+      if (weightedBars > 0) {
+        averageLine = new TLine(firstBar - 0.5, weightedSigma, lastBar + 0.5, weightedSigma);
+        averageLine->SetBit(kCanDelete);
+        averageLine->SetLineColor(kBlack);
+        averageLine->SetLineStyle(2);
+        averageLine->SetLineWidth(2);
+        averageLine->Draw();
+      }
       TLegend* legend = new TLegend(0.10, 0.625, 0.96, 0.715);
       legend->SetBit(kCanDelete);
       legend->SetBorderSize(0);
@@ -1142,7 +1180,8 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       legend->SetNColumns(2);
       legend->AddEntry(gSigmaLayer1, "Layer 1 (bars 0-83)", "pe");
       legend->AddEntry(gSigmaLayer2, "Layer 2 (bars 84-167)", "pe");
-      legend->AddEntry(gSigmaUnavailable, "Insufficient statistics / unusable fit (shown at 0)", "p");
+      legend->AddEntry(gSigmaUnavailable, "Unusable fit (marked at 0)", "p");
+      if (averageLine) legend->AddEntry(averageLine, "Inverse-variance weighted mean", "l");
       legend->Draw();
     } else {
       TH1F* frame = canvas->DrawFrame(firstBar - 0.5, -0.08 * yieldGraphMax,
@@ -1186,6 +1225,11 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       cuts->SetTextSize(0.019);
       cuts->AddText(TString::Format("Bar 30 only: dt_{y} = dt %+.4g (y_{proj}-y_{DB}); n = %.3g (ns, m)", ySlope, YCorrectionRefractiveIndex));
       cuts->AddText("Selections use original dt/raw LE; other bars unchanged");
+    }
+    if (plot == 2) {
+      cuts->SetTextSize(ApplyYCorrection ? 0.016 : 0.019);
+      cuts->AddText(weightedSigmaLabel);
+      cuts->AddText("Weights = 1/(bar fit error)^{2}; mean error assumes independent fits, excludes systematics");
     }
     if (plot == 3) {
       cuts->SetTextSize(ApplyYCorrection ? 0.016 : 0.019);
@@ -1244,6 +1288,17 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   if (std::isnan(TotBinWidth)) TotBinWidth = config.GetValue("pulse_study.tot_bin_width_ns", 1.0);
   if (std::isnan(TotDisplayMin)) TotDisplayMin = config.GetValue("display.tot_min", 0.0);
   if (std::isnan(TotDisplayMax)) TotDisplayMax = config.GetValue("display.tot_max", 60.0);
+  const double ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
+  const double ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
+  const double ECalBinWidth = config.GetValue("pulse_study.ecal_time_bin_width_ns", 0.5);
+  if (!std::isfinite(ECalDisplayMin) || !std::isfinite(ECalDisplayMax) || ECalDisplayMin >= ECalDisplayMax ||
+      !std::isfinite(ECalBinWidth) || ECalBinWidth <= 0.0 ||
+      !std::isfinite((ECalDisplayMax-ECalDisplayMin)/ECalBinWidth) ||
+      std::ceil((ECalDisplayMax-ECalDisplayMin)/ECalBinWidth) > std::numeric_limits<int>::max()-2) {
+    std::cerr << "[CDet pulse bar summary] Invalid ECal-time display settings.\n";
+    return;
+  }
+  const int nECalBins = int(std::ceil((ECalDisplayMax-ECalDisplayMin)/ECalBinWidth));
   const double LeMin = config.GetValue("analysis.le_min", 0.02);
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
@@ -1324,6 +1379,13 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     return;
   }
 
+  const char* leECalCanvasNames[] = {"cPulseBar30RawLeVsECalTime", "cPulseBar30LeCorrVsECalTime"};
+  for (int kind = 0; kind < 2; ++kind) {
+    delete gROOT->GetListOfCanvases()->FindObject(leECalCanvasNames[kind]);
+    delete hPulseBar30LeVsECalTime[kind];
+    hPulseBar30LeVsECalTime[kind] = nullptr;
+  }
+
   // Replace only this routine's previous canvases, including when the bars change.
   delete gROOT->GetListOfCanvases()->FindObject("cControlBar");
   for (int selected = 0; selected < 2; ++selected) {
@@ -1362,6 +1424,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   }
 
   const int RunNumber = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
+  for (int kind = 0; kind < 2; ++kind) {
+    hPulseBar30LeVsECalTime[kind] = new TH2D(TString::Format("hPulseBar30%sVsECalTime", kind == 0 ? "RawLe" : "LeCorr"),
+        TString::Format("%s, bar 30: %s LE versus ECal ADC time;ECal ADC time (ns);%s CDet LE (ns);Pulses",
+            PulseStudyRunLabel(config, RunNumber).Data(), kind == 0 ? "raw" : "corrected", kind == 0 ? "Raw" : "Corrected"),
+        nECalBins, ECalDisplayMin, ECalDisplayMax, nLeBins, LeDisplayMin, LeDisplayMax);
+    hPulseBar30LeVsECalTime[kind]->SetDirectory(nullptr);
+    hPulseBar30LeVsECalTime[kind]->SetStats(false);
+  }
   // Define all histograms before filling. Display limits are not additional cuts.
   for (int selected = 0; selected < 2; ++selected) {
     const int bar = bars[selected];
@@ -1419,7 +1489,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       const int bar = int(id) / pixelsPerBar;
       const int pixel = int(id) % pixelsPerBar;
 
-      if (bar != studyBar && bar != controlBar) continue;
+      if (bar != studyBar && bar != controlBar && bar != 30) continue;
       // All saved timing vectors used here are in ns.
       const double le = vPulseLe[event][hit];
       const double leCorr = vPulseLeCorr[event][hit]; // tdc_le_corr is already in ns.
@@ -1443,6 +1513,12 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         good_ellipse = good_x_res;
       }
       if (!std::isfinite(totNs) || totNs <= 0.0 || !good_ellipse) continue;
+      // Fixed bar-30 diagnostics, even if neither selected summary bar is 30.
+      // Each pulse gets its event's ECal time; corrected LE is already in ns.
+      if (bar == 30 && good_le && good_tot) {
+        hPulseBar30LeVsECalTime[0]->Fill(vECalAdcTime[event], le);
+        if (std::isfinite(leCorr)) hPulseBar30LeVsECalTime[1]->Fill(vECalAdcTime[event], leCorr);
+      }
       for (int selected = 0; selected < 2; ++selected) {
         if (bar != bars[selected]) continue;
         // Compare the secondary ToT window with all other cuts, including LE, fixed.
@@ -1470,7 +1546,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         hPulseBarDtVsTot[selected]->Fill(totNs, dt);
         hPulseFullBarDtAllCuts[selected]->Fill(dt);
       }
-      if (good_le && good_tot) ++filledPulses;
+      if (good_le && good_tot && (bar == studyBar || bar == controlBar)) ++filledPulses;
     }
   }
   // Thirteen canvases per bar; overlay LE cuts on top and compare secondary ToT cuts below.
@@ -1698,9 +1774,30 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       canvas->Update();
       canvas->SaveAs(TString::Format("%s/bar%03d_%s_%s.pdf", outputDirectory.Data(), bars[selected], roles[selected], plotNames[plot]));
     }
+    if (selected == 1) {
+      const double colorMax = std::max(1.0, std::max(hPulseBar30LeVsECalTime[0]->GetMaximum(), hPulseBar30LeVsECalTime[1]->GetMaximum()));
+      const char* files[] = {"bar030_raw_le_vs_ecal_time.pdf", "bar030_le_corr_vs_ecal_time.pdf"};
+      for (int kind = 0; kind < 2; ++kind) {
+        TCanvas* canvas = new TCanvas(leECalCanvasNames[kind], hPulseBar30LeVsECalTime[kind]->GetTitle(), 1000, 850);
+        canvas->SetCanvasSize(1000, 850);
+        canvas->SetTopMargin(0.39);
+        canvas->SetLeftMargin(0.12);
+        canvas->SetRightMargin(0.15);
+        hPulseBar30LeVsECalTime[kind]->SetMinimum(0.0);
+        hPulseBar30LeVsECalTime[kind]->SetMaximum(colorMax);
+        hPulseBar30LeVsECalTime[kind]->Draw("COLZ");
+        TPaveText* cuts = static_cast<TPaveText*>(fullCutLabel->Clone("pulseStudyCuts"));
+        cuts->SetBit(kCanDelete);
+        cuts->GetLine(0)->SetTitle(TString::Format("%s; bar 30; all pixels", PulseStudyRunLabel(config, RunNumber).Data()));
+        cuts->Draw();
+        canvas->Modified();
+        canvas->Update();
+        canvas->SaveAs(outputDirectory + "/" + files[kind]);
+      }
+    }
   }
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
-            << "; selected " << filledPulses << " pulses. Twenty-six bar canvases remain open.\n"
+            << "; selected " << filledPulses << " pulses. Twenty-eight canvases remain open (including two bar-30 ECal-time plots).\n"
             << "  dt uses vPulseDt; LE spectra and LE versus ToT show both vPulseLe and vPulseLeCorr in ns.\n"
             << "  LE cuts still use raw vPulseLe; both LE displays share the configured range/binning.\n"
             << "  dt versus rx uses vPulseDt against stored x residual.\n"
