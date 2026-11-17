@@ -10,12 +10,16 @@
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "first_pass");
 // Position/rx overlays (one visible canvas per bar):
 //   plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "positions", 19, 30);
+//   plotPulseStudyPositionCorrelations("CDet_run6077_pulse_pixel_timing.conf", "correlations", 19, 30);
+//   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "bars_y", true);
 // Background plots, including matched rx canvases for multiple/single pulses in bar 30:
 //   plotPulseStudyBackground("CDet_run6077_pulse_pixel_timing.conf", "multiplicity", 19, 30);
 // Shares CDet_run<run>_pulse_pixel_timing.conf with the pulse-timing macro.
 // Cut arguments override that file for this call only; NAN means use the file.
-// Loading always applies TotMin/TotMax. The secondary plotting ToT switch is
-// pulse_study.apply_tot_cut; it does not disable the loading cut.
+// Loading always applies TotMin; TotMax and ECalMaxE require their analysis.apply_*_max switches.
+// Secondary upper switches are pulse_study.apply_tot_max/apply_ecal_energy_max (default off).
+// Secondary ECal-energy and ToT lower cuts default on; their switches can disable secondary cuts.
+// The secondary pulse_study.apply_tot_cut switch does not disable the loading lower cut.
 // Add your pulse readers, vectors and hit cuts in the marked sections below.
 
 #include <TChain.h>
@@ -67,6 +71,20 @@ TString PulseStudyRunLabel(TEnv& config, int runNumber)
   TString label = TString::Format("Run %d", runNumber);
   if (!target.IsNull()) label += " (" + target + ")";
   return label;
+}
+
+// Keep cut annotations consistent with the optional upper bounds.
+TString PulseStudyEnergyCutLabel(double minimum, double maximum, bool applyMaximum)
+{
+  return applyMaximum ? TString::Format("%.3g < E_{ECal} < %.3g GeV", minimum, maximum)
+      : TString::Format("E_{ECal} > %.3g GeV (upper cut off)", minimum);
+}
+
+TString PulseStudyToTCutLabel(double minimum, double maximum, bool applyMaximum, bool inclusive = true)
+{
+  const char* relation = inclusive ? "#leq" : "<";
+  return applyMaximum ? TString::Format("%.3g %s ToT %s %.3g ns", minimum, relation, relation, maximum)
+      : TString::Format("%.3g %s ToT (ns; upper cut off)", minimum, relation);
 }
 
 // One element per ECal-selected event with at least one selected CDet pulse.
@@ -121,11 +139,13 @@ TH2D* hPulseSummaryPixelLeVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseSummaryPixelLeCorrVsToT[2][pixelsPerBar] = {};
 TH2D* hPulseBarDtVsRx[2] = {nullptr, nullptr};
 TH2D* hPulsePixelDtVsRx[2][pixelsPerBar] = {};
-// Fixed bar-30 ECal-time correlations: 0 = raw LE, 1 = replay-corrected LE.
+// Fixed bar-30 ECal-time correlations: 0 = raw LE, 1 = corrected LE (optional y correction).
 TH2D* hPulseBar30LeVsECalTime[2] = {};
 // Separate position-overlay histograms: index 0 = study bar, 1 = control bar.
 TH1D* hPulsePositionBarX[2] = {};
 TH1D* hPulsePositionBarRx[2] = {};
+// Position correlations: [study/control][ECal native/projected][raw x/corrected x/DB y].
+TH2D* hPulsePositionCorrelation[2][2][3] = {};
 // Multiplicity is counted per event in the background routine's selected bar.
 TH1D* hPulseBackgroundRxMultiple = nullptr;
 TH1D* hPulseBackgroundRxSingle = nullptr;
@@ -244,9 +264,11 @@ void Plot_CDet_PulseStudy(
   if (std::isnan(LeMax)) LeMax = config.GetValue("analysis.le_max", 60.0);
   if (std::isnan(TotMin)) TotMin = config.GetValue("analysis.tot_min", 4.0);
   if (std::isnan(TotMax)) TotMax = config.GetValue("analysis.tot_max", 30.0);
-  if (ApplyToTCut == -1) ApplyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  if (ApplyToTCut == -1) ApplyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   if (std::isnan(ECalMinE)) ECalMinE = config.GetValue("analysis.ecal_energy_min", NAN);
   if (std::isnan(ECalMaxE)) ECalMaxE = config.GetValue("analysis.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("analysis.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("analysis.apply_tot_max", 0) != 0;
   if (std::isnan(ECalMinT)) ECalMinT = config.GetValue("analysis.ecal_time_min", NAN);
   if (std::isnan(ECalMaxT)) ECalMaxT = config.GetValue("analysis.ecal_time_max", NAN);
   if (std::isnan(EllipseRadius)) EllipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
@@ -262,15 +284,15 @@ void Plot_CDet_PulseStudy(
   // Display ranges and fit bounds in the config are NOT selection cuts.
 
   if (RunNumber <= 0 || nevents < -1 || minSeg < -1 || maxSeg < -1 ||
-      !std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE ||
+      !std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
       !std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT) {
     std::cerr << "[CDet pulse study] Invalid run, event/segment limit or ECal energy/time bounds.\n";
     return;
   }
   if ((ApplyToTCut != 0 && ApplyToTCut != 1) ||
       !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
-      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) ||
-       TotMin < 0.0 || TotMin >= TotMax))) {
+      (!std::isfinite(TotMin) || TotMin < 0.0 ||
+       (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax)))) {
     std::cerr << "[CDet pulse study] Invalid LE/ToT bounds or ToT switch.\n";
     return;
   }
@@ -308,8 +330,10 @@ void Plot_CDet_PulseStudy(
     return;
   }
   pulseStudyRunNumber = RunNumber;
-  pulseStudyLoadingECalCuts = TString::Format("Loading: %.3g < E_{ECal} < %.3g GeV, %.3g < t_{ECal} < %.3g ns", ECalMinE, ECalMaxE, ECalMinT, ECalMaxT);
-  pulseStudyLoadingPulseCuts = TString::Format("Loading: %.3g < ToT < %.3g ns; %.3g < LE < %.3g ns; eligible, spatial, calib flags", TotMin, TotMax, LeMin, LeMax);
+  pulseStudyLoadingECalCuts = "Loading: " + PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax)
+      + TString::Format(", %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT);
+  pulseStudyLoadingPulseCuts = "Loading: " + PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax, false)
+      + TString::Format("; %.3g < LE < %.3g ns; eligible, spatial, calib flags", LeMin, LeMax);
   hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("%s: ECal ADC time, saved events;ECal ADC time (ns);Events", PulseStudyRunLabel(config, RunNumber).Data()), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
   hECalAdcTime->SetDirectory(nullptr);
 
@@ -363,10 +387,10 @@ void Plot_CDet_PulseStudy(
 
   std::cout << "[CDet pulse study] Run " << RunNumber << ": reading " << limit << " events.\n"
             << "  Configuration: " << configFile << '\n'
-            << "  ECal energy: " << ECalMinE << " < E < " << ECalMaxE << " GeV\n"
+            << "  " << PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax) << "\n"
             << "  ECal ADC time: " << ECalMinT << " < t < " << ECalMaxT << " ns (before hit loop).\n"
             << "  LE: " << LeMin << " < LE < " << LeMax << " ns\n"
-            << "  Loading ToT window: " << TotMin << " < ToT < " << TotMax << " ns.\n"
+            << "  Loading: " << PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax, false) << "\n"
             << "  Ellipse radius: " << EllipseRadius << " (-1 = off).\n"
             << "  Loading requires ECal energy/time, replay eligibility/spatial/calibration flags, ToT, and LE.\n";
 
@@ -379,7 +403,7 @@ void Plot_CDet_PulseStudy(
 
     // ADD YOUR EVENT-LEVEL CUT BOOLEANS HERE.
     //ECal bools
-    bool good_ECal_energy = std::isfinite(*ECalE) && *ECalE > ECalMinE && *ECalE < ECalMaxE;
+    bool good_ECal_energy = std::isfinite(*ECalE) && *ECalE > ECalMinE && (!applyECalEnergyMax || *ECalE < ECalMaxE);
     bool good_ECal_time = std::isfinite(*ECalAdcTime) && *ECalAdcTime > ECalMinT && *ECalAdcTime < ECalMaxT;
     bool good_ECal_event = good_ECal_energy && good_ECal_time;
     if (!good_ECal_event) continue;
@@ -410,7 +434,7 @@ void Plot_CDet_PulseStudy(
       bool good_ecal_eligible = PulseECalEligible[hit] > 0.5;
       bool good_spatial_pass = PulseSpatialPass[hit] > 0.5;
       bool good_calibration = PulseGoodCalib[hit] > 0.5;
-      bool good_pulse_tot = std::isfinite(PulseToT[hit]) && PulseToT[hit] > TotMin && PulseToT[hit] < TotMax;
+      bool good_pulse_tot = std::isfinite(PulseToT[hit]) && PulseToT[hit] > TotMin && (!applyToTMax || PulseToT[hit] < TotMax);
       const double leNs = 0.01 * PulseLe[hit];
       bool good_le = std::isfinite(leNs) && leNs > LeMin && leNs < LeMax;
       const bool good_hit = good_ecal_eligible && good_spatial_pass && good_calibration && good_pulse_tot && good_le;
@@ -531,12 +555,14 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
@@ -546,10 +572,10 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
   const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
   const bool useEllipse = ellipseRadius > 0.0;
 
-  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
+  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)))) ||
       (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
       !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
-      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0 || TotMin >= TotMax))) {
+      (applyToTCut && (!std::isfinite(TotMin) || TotMin < 0 || (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax))))) {
     std::cerr << "[CDet pulse study] Invalid configured ECal, LE, or ToT cuts.\n";
     return;
   }
@@ -644,7 +670,7 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
     const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
-        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && (!applyECalEnergyMax || vECalE[event] < ECalMaxE)));
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
     if (!good_ECal_energy || !good_ECal_time) continue;
@@ -661,7 +687,7 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
       const double totNs = vPulseToT[event][hit];
       const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
       const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
-          (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
+          (!applyToTCut || (totNs >= TotMin && (!applyToTMax || totNs <= TotMax)));
       bool good_ellipse = true;
       if (useEllipse) {
         // Select once using the branch dt, so both plots contain identical pulses.
@@ -731,6 +757,18 @@ void plotPulseStudy(const char* configFile = "CDet_run6077_pulse_pixel_timing.co
             << "  Out-of-range values remain in histogram underflow/overflow bins.\n";
 }
 
+// Additive correction to dt = ECal time - corrected LE, referenced to the bar center.
+// Global +y points toward the LHS readout. Logical IDs repeat LHS/RHS in each layer.
+// Caller supplies a valid pixel ID, finite positions (m), and positive refractive index.
+double PulseStudyYTimingCorrection(int pixelID, double yDB, double yProj, double refractiveIndex)
+{
+  const double barLength = 0.50; // m
+  const bool isLHS = pixelID % 1344 < 672;
+  const double yReadout = yDB + (isLHS ? +0.5 : -0.5) * barLength;
+  const double distance = std::abs(yReadout - yProj);
+  return (refractiveIndex / 0.299792458) * (distance - barLength / 2.0);
+}
+
 // Interactive Gaussian + linear-background signal widths; run the main analysis first.
 // getBarSigma("CDet_run6077_pulse_pixel_timing.conf", "sigma_study");
 // getBarSigma("this.conf", "bar30_y", true); // optional bar-30 y correction
@@ -760,12 +798,14 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
   const double FitSignalMin = config.GetValue("pulse_study.fit_signal_min", -36.0);
@@ -774,12 +814,12 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   const double FitSigma = config.GetValue("pulse_study.fit_sigma", 5.0);
   if (std::isnan(PeakNSigma)) PeakNSigma = config.GetValue("pulse_study.peak_nsigma", 2.0);
   // Same initial propagation model as the existing y-timing diagnostics.
-  // Bar 30 is on the left readout side: b_LE = -n/c (ns/m).
+  // Use endpoint distance for either side; this diagnostic still applies only to bar 30.
   const int yCorrectionBar = 30;
   if (std::isnan(YCorrectionRefractiveIndex))
     YCorrectionRefractiveIndex = config.GetValue("pulse_study.y_correction_refractive_index", 1.59);
-  const double ySlope = -YCorrectionRefractiveIndex / 0.299792458;
-  if (ApplyYCorrection && (!std::isfinite(ySlope) || YCorrectionRefractiveIndex <= 0.0)) {
+  const double propagationNsPerMeter = YCorrectionRefractiveIndex / 0.299792458;
+  if (ApplyYCorrection && (!std::isfinite(propagationNsPerMeter) || YCorrectionRefractiveIndex <= 0.0)) {
     std::cerr << "[CDet bar sigma] Y correction requires a finite, positive refractive index.\n";
     return;
   }
@@ -806,8 +846,8 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   }
   if (!std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
       !std::isfinite(xRes) || xRes <= 0.0 ||
-      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0.0 || TotMin >= TotMax)) ||
-      (applyECalEnergyCut && (!std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
+      (applyToTCut && (!std::isfinite(TotMin) || TotMin < 0.0 || (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax)))) ||
+      (applyECalEnergyCut && (!std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)))) ||
       (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
       !std::isfinite(ellipseRadius) || (!useEllipse && ellipseRadius != -1.0) ||
       (useEllipse && (!std::isfinite(ellipseXCenter) || !std::isfinite(ellipseTimeCenter) ||
@@ -924,7 +964,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
     for (size_t event = 0; event < vPulseStudyDenominatorECalE.size(); ++event) {
       const double e = vPulseStudyDenominatorECalE[event], t = vPulseStudyDenominatorECalTime[event];
       if (std::isfinite(e) && std::isfinite(t) &&
-          (!applyECalEnergyCut || (e > ECalMinE && e < ECalMaxE)) &&
+          (!applyECalEnergyCut || (e > ECalMinE && (!applyECalEnergyMax || e < ECalMaxE))) &&
           (!applyECalTimeCut || (t > ECalMinT && t < ECalMaxT))) ++ecalEventCount;
     }
   }
@@ -934,7 +974,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
     const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
-        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && (!applyECalEnergyMax || vECalE[event] < ECalMaxE)));
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
     if (!good_ECal_energy || !good_ECal_time) continue;
@@ -950,7 +990,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       const double rx = vPulseXResiduals[event][hit];
       const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
       const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
-          (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
+          (!applyToTCut || (totNs >= TotMin && (!applyToTMax || totNs <= TotMax)));
       const bool good_x_res = std::isfinite(rx) && std::abs(rx) <= xRes;
 
       bool good_ellipse = true;
@@ -967,10 +1007,11 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
       }
       if (!good_le || !good_tot || !good_ellipse) continue;
       // Selection above always uses the original branch dt and raw LE.
-      // LE_y = LE_corr - b_LE*(y_projected - y_DB), hence dt_y = dt + b_LE*dy.
+      // Remove propagation delay relative to the bar center: dt_y = dt + (n/c)*(d-L/2).
       // The saved projection already uses each pulse's CDet z: y_ECal*z_CDet/z_ECal.
       const double plotDt = ApplyYCorrection && bar == yCorrectionBar
-          ? dt + ySlope * (vECalYProjection[event][hit] - vPulseY[event][hit]) : dt;
+          ? dt + PulseStudyYTimingCorrection(int(id), vPulseY[event][hit],
+              vECalYProjection[event][hit], YCorrectionRefractiveIndex) : dt;
       hBarDt[bar]->Fill(plotDt);
       hBarDt[numBars]->Fill(plotDt);
       barDt[bar].push_back(plotDt);
@@ -1212,18 +1253,18 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
         hBarDt[controlBar]->GetBinWidth(1)));
     cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts);
     cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts);
-    const TString energyCut = applyECalEnergyCut ? TString::Format("%.3g < ECal E < %.3g GeV", ECalMinE, ECalMaxE) : "ECal energy off";
+    const TString energyCut = applyECalEnergyCut ? PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax) : "ECal energy off";
     const TString timeCut = applyECalTimeCut ? TString::Format("%.3g < ECal time < %.3g ns", ECalMinT, ECalMaxT) : "ECal time off";
     cuts->AddText("Secondary: " + energyCut + "; " + timeCut);
     cuts->AddText(TString::Format("Raw LE: %.3g #leq LE #leq %.3g ns; %s", LeMin, LeMax,
-        applyToTCut ? TString::Format("%.3g #leq ToT #leq %.3g ns; ToT > 0", TotMin, TotMax).Data() : "finite ToT > 0 (secondary window off)"));
+        applyToTCut ? (PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax) + "; ToT > 0").Data() : "finite ToT > 0 (secondary window off)"));
     cuts->AddText(useEllipse
         ? TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g^{2} (m, ns)",
             ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius)
         : TString::Format("|rx| #leq %.3g m; ellipse off", xRes));
     if (ApplyYCorrection) {
       cuts->SetTextSize(0.019);
-      cuts->AddText(TString::Format("Bar 30 only: dt_{y} = dt %+.4g (y_{proj}-y_{DB}); n = %.3g (ns, m)", ySlope, YCorrectionRefractiveIndex));
+      cuts->AddText(TString::Format("Bar 30: dt_{y}=dt+(n/c)(|y_{readout}-y_{proj}|-0.25 m); n=%.3g", YCorrectionRefractiveIndex));
       cuts->AddText("Selections use original dt/raw LE; other bars unchanged");
     }
     if (plot == 2) {
@@ -1246,7 +1287,7 @@ void getBarSigma(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf"
   }
   std::cout << "[CDet bar sigma] Selected " << filledPulses << " pulses; saved four PDFs under " << outputDirectory << '\n';
   if (ApplyYCorrection) std::cout << "[CDet bar sigma] Bar 30 y correction on: n=" << YCorrectionRefractiveIndex
-      << ", b_LE=" << ySlope << " ns/m; original selections and saved vectors preserved.\n";
+      << ", n/c=" << propagationNsPerMeter << " ns/m; d=|y_readout-y_proj|, L=0.50 m, center-referenced; original selections and saved vectors preserved.\n";
   if (useEllipse) std::cout << "[CDet bar sigma] The dt-dependent ellipse can narrow the measured spectra.\n";
 
 }//end getBarSigma macro
@@ -1263,13 +1304,14 @@ void getBarSigma(const char* configFile, const char* outputTag, bool ApplyYCorre
 // Interactive plots for the study/control bars: one spectrum or 4x4 grid per canvas.
 // The optional ellipse uses branch dt; otherwise the configured x-residual cut applies.
 // dt uses vPulseDt. Raw and corrected LE are saved in ns; LE cuts always use raw LE.
-// Every dt plot uses the stored pulse.ecal_residual branch, including dt versus rx.
+// dt starts from pulse.ecal_residual; optional y correction shifts plotted dt and corrected LE.
 // Leaves canvases open and does not change ROOT's batch setting. Use an interactive session.
 void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                         const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
                         double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
                         double LeBinWidth = NAN, double LeDisplayMin = NAN, double LeDisplayMax = NAN,
-                        double TotBinWidth = NAN, double TotDisplayMin = NAN, double TotDisplayMax = NAN)
+                        double TotBinWidth = NAN, double TotDisplayMin = NAN, double TotDisplayMax = NAN,
+                        bool ApplyYCorrection = false, double YCorrectionRefractiveIndex = NAN)
 {
   TEnv config;
   if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
@@ -1304,12 +1346,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
@@ -1319,10 +1363,10 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
   const bool useEllipse = ellipseRadius > 0.0;
 
-  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
+  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)))) ||
       (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
       !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
-      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0 || TotMin >= TotMax))) {
+      (applyToTCut && (!std::isfinite(TotMin) || TotMin < 0 || (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax))))) {
     std::cerr << "[CDet pulse bar summary] Invalid configured ECal, LE, or ToT cuts.\n";
     return;
   }
@@ -1344,6 +1388,29 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   if (vPulseID.empty()) {
     std::cerr << "[CDet pulse bar summary] No saved pulse events; run the main macro first.\n";
     return;
+  }
+  if (std::isnan(YCorrectionRefractiveIndex))
+    YCorrectionRefractiveIndex = config.GetValue("pulse_study.y_correction_refractive_index", 1.59);
+  if (ApplyYCorrection) {
+    if (!std::isfinite(YCorrectionRefractiveIndex / 0.299792458) || YCorrectionRefractiveIndex <= 0.0) {
+      std::cerr << "[CDet pulse bar summary] Invalid y-correction refractive index.\n";
+      return;
+    }
+    // Validate before replacing plots; include the fixed bar-30 ECal-time diagnostic.
+    for (size_t event = 0; event < vPulseID.size(); ++event) {
+      for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
+        const double id = vPulseID[event][hit];
+        if (!std::isfinite(id) || id < 0 || id >= numBars*pixelsPerBar || std::floor(id) != id) continue;
+        const int bar = int(id) / pixelsPerBar;
+        if (bar != studyBar && bar != controlBar && bar != 30) continue;
+        if (event >= vPulseY.size() || event >= vECalYProjection.size() ||
+            hit >= vPulseY[event].size() || hit >= vECalYProjection[event].size() ||
+            !std::isfinite(vPulseY[event][hit]) || !std::isfinite(vECalYProjection[event][hit])) {
+          std::cerr << "[CDet pulse bar summary] Missing/nonfinite DB y or projected ECal y; rerun main analysis.\n";
+          return;
+        }
+      }
+    }
   }
   const int bars[2] = {studyBar, controlBar};
   const char* roles[2] = {"Study", "Control"};
@@ -1472,11 +1539,29 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
     }
   }
 
+  if (ApplyYCorrection) {
+    for (int selected = 0; selected < 2; ++selected) {
+      for (TH1* hist : {hPulseSummaryBarDt[selected], hPulseFullBarDtNoLeCut[selected], hPulseFullBarDtAllCuts[selected]})
+        hist->GetXaxis()->SetTitle("Y-corrected dt (ns)");
+      for (TH2* hist : {hPulseBarDtVsTot[selected], hPulseBarDtVsTotNoTotCut[selected], hPulseBarDtVsRx[selected]})
+        hist->GetYaxis()->SetTitle("Y-corrected dt (ns)");
+      hPulseSummaryBarLeCorr[selected]->GetXaxis()->SetTitle("Replay + y-corrected CDet LE (ns)");
+      hPulseSummaryBarLeCorrVsToT[selected]->GetYaxis()->SetTitle("Replay + y-corrected CDet LE (ns)");
+      for (int pixel = 0; pixel < pixelsPerBar; ++pixel) {
+        hPulseSummaryPixelDt[selected][pixel]->GetXaxis()->SetTitle("Y-corrected dt (ns)");
+        hPulsePixelDtVsRx[selected][pixel]->GetYaxis()->SetTitle("Y-corrected dt (ns)");
+        hPulseSummaryPixelLeCorr[selected][pixel]->GetXaxis()->SetTitle("Replay + y-corrected CDet LE (ns)");
+        hPulseSummaryPixelLeCorrVsToT[selected][pixel]->GetYaxis()->SetTitle("Replay + y-corrected CDet LE (ns)");
+      }
+    }
+    hPulseBar30LeVsECalTime[1]->GetYaxis()->SetTitle("Replay + y-corrected CDet LE (ns)");
+  }
+
   // One pass through the aligned saved vectors. dt is already in ns.
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
     const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
-        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && (!applyECalEnergyMax || vECalE[event] < ECalMaxE)));
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
     if (!good_ECal_energy || !good_ECal_time) continue;
@@ -1492,12 +1577,16 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       if (bar != studyBar && bar != controlBar && bar != 30) continue;
       // All saved timing vectors used here are in ns.
       const double le = vPulseLe[event][hit];
-      const double leCorr = vPulseLeCorr[event][hit]; // tdc_le_corr is already in ns.
+      const double yDtCorrection = ApplyYCorrection
+          ? PulseStudyYTimingCorrection(int(id), vPulseY[event][hit],
+              vECalYProjection[event][hit], YCorrectionRefractiveIndex) : 0.0;
+      const double plotDt = dt + yDtCorrection;
+      const double leCorr = vPulseLeCorr[event][hit] - yDtCorrection; // ns; saved vectors unchanged.
       const double totNs = vPulseToT[event][hit];
       const double rx = vPulseXResiduals[event][hit];
       const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
       const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
-          (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
+          (!applyToTCut || (totNs >= TotMin && (!applyToTMax || totNs <= TotMax)));
       const bool good_x_res = std::isfinite(rx) && std::abs(rx) <= xRes;
 
       bool good_ellipse = true;
@@ -1523,14 +1612,14 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         if (bar != bars[selected]) continue;
         // Compare the secondary ToT window with all other cuts, including LE, fixed.
         // Pulses rejected by the main loading ToT window are not in these vectors.
-        if (good_le) hPulseBarDtVsTotNoTotCut[selected]->Fill(totNs, dt);
+        if (good_le) hPulseBarDtVsTotNoTotCut[selected]->Fill(totNs, plotDt);
         if (!good_tot) continue;
         // Same event, ToT, and spatial/ellipse cuts; omit only the raw-LE cut.
-        hPulseFullBarDtNoLeCut[selected]->Fill(dt);
+        hPulseFullBarDtNoLeCut[selected]->Fill(plotDt);
         if (!good_le) continue;
-        hPulseSummaryBarDt[selected]->Fill(dt);
+        hPulseSummaryBarDt[selected]->Fill(plotDt);
         hPulseSummaryBarLe[selected]->Fill(le);
-        hPulseSummaryPixelDt[selected][pixel]->Fill(dt);
+        hPulseSummaryPixelDt[selected][pixel]->Fill(plotDt);
         hPulseSummaryPixelLe[selected][pixel]->Fill(le);
         hPulseSummaryBarLeVsToT[selected]->Fill(totNs, le);
         hPulseSummaryPixelLeVsToT[selected][pixel]->Fill(totNs, le);
@@ -1541,10 +1630,10 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
           hPulseSummaryBarLeCorrVsToT[selected]->Fill(totNs, leCorr);
           hPulseSummaryPixelLeCorrVsToT[selected][pixel]->Fill(totNs, leCorr);
         }
-        hPulseBarDtVsRx[selected]->Fill(rx, dt);
-        hPulsePixelDtVsRx[selected][pixel]->Fill(rx, dt);
-        hPulseBarDtVsTot[selected]->Fill(totNs, dt);
-        hPulseFullBarDtAllCuts[selected]->Fill(dt);
+        hPulseBarDtVsRx[selected]->Fill(rx, plotDt);
+        hPulsePixelDtVsRx[selected][pixel]->Fill(rx, plotDt);
+        hPulseBarDtVsTot[selected]->Fill(totNs, plotDt);
+        hPulseFullBarDtAllCuts[selected]->Fill(plotDt);
       }
       if (good_le && good_tot && (bar == studyBar || bar == controlBar)) ++filledPulses;
     }
@@ -1576,6 +1665,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       if (panel == 0) {
         histogram->SetTitle(TString::Format("%s, bar %d: dt before/after secondary raw-LE cut;Stored pulse.ecal_residual (ns);Pulses",
             PulseStudyRunLabel(config, RunNumber).Data(), bars[selected]));
+        if (ApplyYCorrection) histogram->GetXaxis()->SetTitle("Y-corrected dt (ns)");
         histogram->SetMaximum(dtMaximum);
         histogram->SetLineWidth(2);
         histogram->SetLineColor(kRed + 1);
@@ -1609,10 +1699,10 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       cuts->AddText(TString::Format("%s; %s bar %d; all pixels", PulseStudyRunLabel(config, RunNumber).Data(), roles[selected], bars[selected]));
       cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
       cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
-      cuts->AddText(applyECalEnergyCut ? TString::Format("Secondary: %.3g < E_{ECal} < %.3g GeV", ECalMinE, ECalMaxE) : TString("Secondary ECal energy cut: off"));
+      cuts->AddText(applyECalEnergyCut ? ("Secondary: " + PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax)) : TString("Secondary ECal energy cut: off"));
       cuts->AddText(applyECalTimeCut ? TString::Format("Secondary: %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT) : TString("Secondary ECal time cut: off"));
       cuts->AddText(panel == 1 ? TString("Before secondary ToT window; finite ToT > 0 required") :
-          (applyToTCut ? TString::Format("Secondary: %.3g #leq ToT #leq %.3g ns", TotMin, TotMax) : TString("Secondary ToT window: off; finite ToT > 0 required")));
+          (applyToTCut ? ("Secondary: " + PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax)) : TString("Secondary ToT window: off; finite ToT > 0 required")));
       if (useEllipse) {
         cuts->AddText(TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g", ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius * ellipseRadius));
         cuts->AddText("Ellipse units: rx in m, dt in ns; finite dt/rx required");
@@ -1620,6 +1710,11 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
         cuts->AddText(TString::Format("|rx| #leq %.3g m; ellipse off; finite dt/rx required", xRes));
       }
       cuts->AddText(panel == 0 ? TString::Format("Raw LE: red = before; blue = after %.3g #leq LE #leq %.3g ns (loading cut remains)", LeMin, LeMax) : TString::Format("%.3g #leq raw LE #leq %.3g ns", LeMin, LeMax));
+      if (ApplyYCorrection) {
+        cuts->SetTextSize(0.021);
+        cuts->AddText(TString::Format("Y correction ON: dt += (n/c)(d-0.25 m), LE_{corr} -= same; n=%.3g", YCorrectionRefractiveIndex));
+        cuts->AddText("d=|y_{readout}-y_{proj}|; cuts use original dt/raw LE");
+      }
       cuts->Draw();
       if (panel == 2) fullCutLabel = cuts; // Same selection as the plots below.
     }
@@ -1796,12 +1891,21 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
       }
     }
   }
+  if (ApplyYCorrection) std::cout << "[CDet pulse bar summary] Y correction ON for both selected bars and fixed bar 30; raw LE and stored vectors unchanged.\n";
   std::cout << "[CDet pulse bar summary] Drew study bar " << studyBar << " and control bar " << controlBar
             << "; selected " << filledPulses << " pulses. Twenty-eight canvases remain open (including two bar-30 ECal-time plots).\n"
-            << "  dt uses vPulseDt; LE spectra and LE versus ToT show both vPulseLe and vPulseLeCorr in ns.\n"
+            << "  dt starts from vPulseDt; corrected LE starts from vPulseLeCorr; optional y correction applies to both.\n"
             << "  LE cuts still use raw vPulseLe; both LE displays share the configured range/binning.\n"
-            << "  dt versus rx uses vPulseDt against stored x residual.\n"
+            << "  dt versus rx uses the plotted dt against stored x residual.\n"
             << "  PDF output: " << outputDirectory << '\n';
+}
+
+// Convenient opt-in call, with optional study/control bars; numeric bar calls remain compatible.
+void plotPulseStudyBars(const char* configFile, const char* outputTag, bool ApplyYCorrection,
+                        int studyBar = -1, int controlBar = -1)
+{
+  plotPulseStudyBars(configFile, outputTag, studyBar, controlBar,
+      NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, ApplyYCorrection);
 }
 
 // 7. Interactive x/rx overlays for the study/control bars, with the same cuts as
@@ -1829,12 +1933,14 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
   const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
@@ -1844,10 +1950,10 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
   const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
   const bool useEllipse = ellipseRadius > 0.0;
 
-  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)) ||
+  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)))) ||
       (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
       !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
-      (applyToTCut && (!std::isfinite(TotMin) || !std::isfinite(TotMax) || TotMin < 0 || TotMin >= TotMax))) {
+      (applyToTCut && (!std::isfinite(TotMin) || TotMin < 0 || (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax))))) {
     std::cerr << "[CDet pulse positions] Invalid configured ECal, LE, or ToT cuts.\n";
     return;
   }
@@ -1912,7 +2018,7 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
     const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
-        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && vECalE[event] < ECalMaxE));
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && (!applyECalEnergyMax || vECalE[event] < ECalMaxE)));
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
     if (!good_ECal_energy || !good_ECal_time) continue;
@@ -1931,7 +2037,7 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
       const double x = UseCorrectedX ? vPulseXCorr[event][hit] : vPulseX[event][hit];
       const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
       const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
-          (!applyToTCut || (totNs >= TotMin && totNs <= TotMax));
+          (!applyToTCut || (totNs >= TotMin && (!applyToTMax || totNs <= TotMax)));
       const bool good_x_res = std::isfinite(rx) && std::abs(rx) <= xRes;
 
       bool good_ellipse = true;
@@ -1982,6 +2088,232 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
             << "  Blue: " << xLabel << "; red: stored rx. Positions are in metres.\n"
             << "  Values outside the display bounds remain in underflow/overflow bins.\n"
             << "  PDF output: " << outputDirectory << '\n';
+}
+
+// Native and projected ECal coordinates versus raw/aligned CDet x and DB y.
+// Same event/vector/cut architecture as plotPulseStudyBars; no layer pairing.
+void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
+                            const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
+                            double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN)
+{
+  TEnv config;
+  if (!configFile || !configFile[0] || config.ReadFile(configFile, kEnvLocal) != 0 ||
+      config.GetValue("config.version", 0) != 1) {
+    std::cerr << "[CDet position correlations] Cannot read configuration with config.version: 1.\n";
+    return;
+  }
+  if (studyBar == -1) studyBar = config.GetValue("pulse_pixel_timing.study_bar", 19);
+  if (controlBar == -1) controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
+  if (std::isnan(PositionBinWidth)) PositionBinWidth = config.GetValue("pulse_study.position_bin_width_m", 0.005);
+  if (std::isnan(PositionMin)) PositionMin = config.GetValue("pulse_study.position_min_m", -1.6);
+  if (std::isnan(PositionMax)) PositionMax = config.GetValue("pulse_study.position_max_m", 1.6);
+  const double LeMin = config.GetValue("analysis.le_min", 0.02);
+  const double LeMax = config.GetValue("analysis.le_max", 60.0);
+  const double TotMin = config.GetValue("analysis.tot_min", 4.0);
+  const double TotMax = config.GetValue("analysis.tot_max", 30.0);
+  const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
+  // Loading applied energy/time and replay ECal eligibility; these cuts only narrow saved events.
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
+  const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
+  const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
+  const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
+  const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
+  const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
+  const double ellipseRadius = config.GetValue("good_pulse.single_cut_radius", -1.0);
+  const double ellipseXCenter = config.GetValue("good_pulse.single_residual_center_m", 0.0);
+  const double ellipseTimeCenter = config.GetValue("good_pulse.single_timing_center_ns", -26.0);
+  const double ellipseXScale = config.GetValue("good_pulse.single_residual_scale_m", 0.040);
+  const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
+  const bool useEllipse = ellipseRadius > 0.0;
+
+  if ((applyECalEnergyCut && (!std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE)))) ||
+      (applyECalTimeCut && (!std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT)) ||
+      !std::isfinite(LeMin) || !std::isfinite(LeMax) || LeMin >= LeMax ||
+      (applyToTCut && (!std::isfinite(TotMin) || TotMin < 0 || (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax))))) {
+    std::cerr << "[CDet position correlations] Invalid configured ECal, LE, or ToT cuts.\n";
+    return;
+  }
+  if (!std::isfinite(ellipseRadius) || (!useEllipse && ellipseRadius != -1.0) ||
+      (useEllipse && (!std::isfinite(ellipseXCenter) || !std::isfinite(ellipseTimeCenter) ||
+       !std::isfinite(ellipseXScale) || !std::isfinite(ellipseTimeScale) ||
+       ellipseXScale <= 0.0 || ellipseTimeScale <= 0.0))) {
+    std::cerr << "[CDet position correlations] Invalid ellipse settings; radius -1 disables it.\n";
+    return;
+  }
+  if (studyBar < 0 || studyBar >= numBars || controlBar < 0 || controlBar >= numBars ||
+      !std::isfinite(PositionBinWidth) || PositionBinWidth <= 0 ||
+      !std::isfinite(PositionMin) || !std::isfinite(PositionMax) || PositionMin >= PositionMax ||
+      !std::isfinite((PositionMax - PositionMin) / PositionBinWidth) ||
+      std::ceil((PositionMax - PositionMin) / PositionBinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet position correlations] Invalid bar IDs or position display settings.\n";
+    return;
+  }
+  if (vPulseID.empty()) {
+    std::cerr << "[CDet position correlations] No saved pulse events; run the main macro first.\n";
+    return;
+  }
+  if (!std::isfinite(xRes) || xRes <= 0.0 ||
+      std::pow(std::ceil((PositionMax-PositionMin)/PositionBinWidth)+2.0, 2) > std::numeric_limits<int>::max()) {
+    std::cerr << "[CDet position correlations] Invalid rx cut or too many 2D histogram cells.\n";
+    return;
+  }
+  // Both coordinate versions use the same saved events and pulse selection.
+  if (vECalX.size() != vPulseID.size() || vECalY.size() != vPulseID.size()) {
+    std::cerr << "[CDet position correlations] Missing event ECal positions; rerun main analysis.\n";
+    return;
+  }
+  for (size_t event = 0; event < vPulseID.size(); ++event) {
+    for (const auto* values : {&vPulseX, &vPulseXCorr, &vPulseY, &vECalXProjection, &vECalYProjection}) {
+      if (event >= values->size() || (*values)[event].size() != vPulseID[event].size()) {
+        std::cerr << "[CDet position correlations] Position vectors are not event/hit aligned; rerun main analysis.\n";
+        return;
+      }
+    }
+  }
+  const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
+  const int bars[2] = {studyBar, controlBar};
+  const char* roles[2] = {"Study", "Control"};
+  TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
+  if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
+  const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (int i = 0; i < tag.Length(); ++i) {
+    if (allowedTagCharacters.First(tag[i]) == kNPOS) {
+      std::cerr << "[CDet position correlations] Output tag may contain only letters, numbers, underscores, and hyphens.\n";
+      return;
+    }
+  }
+  const TString outputDirectory = TString::Format("%s/PusleStudy/%s", gSystem->WorkingDirectory(), tag.Data());
+  if (gSystem->AccessPathName(outputDirectory)) gSystem->mkdir(outputDirectory, true);
+  FileStat_t outputInfo;
+  if (gSystem->GetPathInfo(outputDirectory, outputInfo) != 0 || !R_ISDIR(outputInfo.fMode) ||
+      gSystem->AccessPathName(outputDirectory, kWritePermission)) {
+    std::cerr << "[CDet position correlations] Cannot write output directory: " << outputDirectory << '\n';
+    return;
+  }
+
+  const int RunNumber = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
+  const char* coordinateNames[] = {"RawX", "CorrectedX", "Y"};
+  const char* coordinateFiles[] = {"raw_x", "corrected_x", "y"};
+  const char* cdetLabels[] = {"Channel CDet x (m)", "Aligned CDet x (m)", "DB CDet y (m)"};
+  const char* ecalNames[] = {"Native", "Projected"};
+  // Replace this routine's plots on each call, then define, fill, and draw.
+  for (int selected = 0; selected < 2; ++selected) {
+    for (int projected = 0; projected < 2; ++projected) {
+      for (int coordinate = 0; coordinate < 3; ++coordinate) {
+        delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]));
+        delete hPulsePositionCorrelation[selected][projected][coordinate];
+        const TString ecalLabel = TString::Format("ECal %s%s (m)", coordinate == 2 ? "y" : "x", projected ? " projected to pixel z" : " at ECal");
+        auto*& histogram = hPulsePositionCorrelation[selected][projected][coordinate];
+        histogram = new TH2D(TString::Format("hPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]),
+            TString::Format("%s, bar %d: %s vs ECal;%s;%s;Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bars[selected], coordinateNames[coordinate], ecalLabel.Data(), cdetLabels[coordinate]),
+            nPositionBins, PositionMin, PositionMax, nPositionBins, PositionMin, PositionMax);
+        histogram->SetDirectory(nullptr);
+        histogram->SetStats(false);
+      }
+    }
+  }
+
+  // One pass through the aligned saved vectors. dt is already in ns.
+  Long64_t filledPulses = 0;
+  for (size_t event = 0; event < vPulseID.size(); ++event) {
+    const bool good_ECal_energy = std::isfinite(vECalE[event]) &&
+        (!applyECalEnergyCut || (vECalE[event] > ECalMinE && (!applyECalEnergyMax || vECalE[event] < ECalMaxE)));
+    const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
+        (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
+    if (!good_ECal_energy || !good_ECal_time) continue;
+    for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
+      const double id = vPulseID[event][hit];
+      const double dt = vPulseDt[event][hit];
+      if (!std::isfinite(id) || id < 0 || id >= numBars * pixelsPerBar ||
+          std::floor(id) != id || !std::isfinite(dt)) continue;
+      const int bar = int(id) / pixelsPerBar;
+
+      if (bar != studyBar && bar != controlBar) continue;
+      // All saved timing vectors used here are in ns.
+      const double le = vPulseLe[event][hit];
+      const double totNs = vPulseToT[event][hit];
+      const double rx = vPulseXResiduals[event][hit];
+      const bool good_le = std::isfinite(le) && le >= LeMin && le <= LeMax;
+      const bool good_tot = std::isfinite(totNs) && totNs > 0.0 &&
+          (!applyToTCut || (totNs >= TotMin && (!applyToTMax || totNs <= TotMax)));
+      const bool good_x_res = std::isfinite(rx) && std::abs(rx) <= xRes;
+
+      bool good_ellipse = true;
+      if (useEllipse) {
+        // Select once using the branch dt, so both plots contain identical pulses.
+        const double normalizedX = (rx - ellipseXCenter) / ellipseXScale;
+        const double normalizedTime = (dt - ellipseTimeCenter) / ellipseTimeScale;
+        good_ellipse = std::isfinite(rx) &&
+            normalizedX * normalizedX + normalizedTime * normalizedTime <= ellipseRadius * ellipseRadius;
+      }
+      else {
+        // If the ellipse is not used, still apply the x residual cut.
+        good_ellipse = good_x_res;
+      }
+      if (!good_le || !good_tot || !good_ellipse) continue;
+      for (int selected = 0; selected < 2; ++selected) {
+        if (bar != bars[selected]) continue;
+        const double cdet[] = {vPulseX[event][hit], vPulseXCorr[event][hit], vPulseY[event][hit]};
+        for (int projected = 0; projected < 2; ++projected) {
+          const double ecalX = projected ? vECalXProjection[event][hit] : vECalX[event];
+          const double ecalY = projected ? vECalYProjection[event][hit] : vECalY[event];
+          for (int coordinate = 0; coordinate < 3; ++coordinate) {
+            const double ecal = coordinate == 2 ? ecalY : ecalX;
+            if (std::isfinite(ecal) && std::isfinite(cdet[coordinate]))
+              hPulsePositionCorrelation[selected][projected][coordinate]->Fill(ecal, cdet[coordinate]);
+          }
+        }
+      }
+      ++filledPulses;
+    }
+  }
+  // Six separate interactive canvases per bar, with the same axes for comparisons.
+  for (int selected = 0; selected < 2; ++selected) {
+    for (int projected = 0; projected < 2; ++projected) {
+      const double xColorMax = std::max(1.0, std::max(hPulsePositionCorrelation[selected][projected][0]->GetMaximum(), hPulsePositionCorrelation[selected][projected][1]->GetMaximum()));
+      for (int coordinate = 0; coordinate < 3; ++coordinate) {
+        TH2D* histogram = hPulsePositionCorrelation[selected][projected][coordinate];
+        TCanvas* canvas = new TCanvas(TString::Format("cPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]), histogram->GetTitle(), 1200, 742);
+        canvas->SetCanvasSize(1200, 742);
+        canvas->SetTopMargin(0.40);
+        canvas->SetLeftMargin(0.12);
+        canvas->SetRightMargin(0.15);
+        histogram->SetMinimum(0.0);
+        if (coordinate < 2) histogram->SetMaximum(xColorMax);
+        histogram->Draw("COLZ");
+        TPaveText* cuts = new TPaveText(0.10, 0.63, 0.96, 0.92, "NDC");
+        cuts->SetName("pulseCorrelationCuts");
+        cuts->SetBit(kCanDelete);
+        cuts->SetFillColor(kWhite);
+        cuts->SetBorderSize(0);
+        cuts->SetTextAlign(12);
+        cuts->SetTextFont(42);
+        cuts->SetTextSize(0.018);
+        cuts->AddText(TString::Format("%s; %s bar %d; all pixels", PulseStudyRunLabel(config, RunNumber).Data(), roles[selected], bars[selected]));
+        cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
+        cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
+        cuts->AddText(applyECalEnergyCut ? ("Secondary: " + PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax)) : TString("Secondary ECal energy cut: off"));
+        cuts->AddText(applyECalTimeCut ? TString::Format("Secondary: %.3g < t_{ECal} < %.3g ns", ECalMinT, ECalMaxT) : TString("Secondary ECal time cut: off"));
+        cuts->AddText(TString::Format("%.3g #leq raw LE #leq %.3g ns; %s", LeMin, LeMax,
+            applyToTCut ? (PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax) + "; ToT > 0").Data() : "finite ToT > 0; secondary window off"));
+        cuts->AddText(useEllipse ? TString::Format("Ellipse: ((rx-%.3g)/%.3g)^{2}+((dt-%.3g)/%.3g)^{2} #leq %.3g^{2} (m, ns)", ellipseXCenter, ellipseXScale, ellipseTimeCenter, ellipseTimeScale, ellipseRadius)
+            : TString::Format("|rx| #leq %.3g m; ellipse off", xRes));
+        cuts->AddText("Selection uses stored dt/rx for every plot; finite plotted coordinates required");
+        cuts->AddText(projected ? "ECal projected to each pulse z; projection = ECal coordinate * z_{pixel}/z_{ECal}" : "ECal coordinate at ECal; no projection");
+        if (coordinate == 2) cuts->AddText("CDet y is the DB channel center, not a reconstructed interaction position");
+        cuts->Draw();
+        canvas->Modified();
+        canvas->Update();
+        canvas->SaveAs(TString::Format("%s/bar%03d_%s_%s_vs_ecal_%s.pdf", outputDirectory.Data(), bars[selected], roles[selected], coordinateFiles[coordinate], projected ? "projected" : "native"));
+      }
+    }
+  }
+  std::cout << "[CDet position correlations] Selected " << filledPulses
+            << " pulses; twelve canvases remain open. ECal is on the horizontal axis, CDet on the vertical axis.\n"
+            << "  Same stored dt/rx cuts for raw/aligned x; no layer pairing. PDF output: " << outputDirectory << '\n';
 }
 
 // calibrationFile must contain the pixel constants used to replay the saved events.
@@ -2059,7 +2391,7 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   }
 
   // define potential cuts
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double controlFitMin = config.GetValue("pulse_study.control_fit_min", -40.0);
   const double controlFitMax = config.GetValue("pulse_study.control_fit_max", 0.0);
@@ -2074,7 +2406,7 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", 10);
   const double LeMin = config.GetValue("analysis.le_min", 0.02);
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08);
@@ -2425,15 +2757,17 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
 
   // Existing secondary-cut settings.
   // Saved vectors already have the main macro's loading cuts applied.
-  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 0) != 0;
+  const bool applyECalEnergyCut = config.GetValue("pulse_study.apply_ecal_energy_cut", 1) != 0;
   const bool applyECalTimeCut = config.GetValue("pulse_study.apply_ecal_time_cut", 0) != 0;
   const double ECalMinE = config.GetValue("pulse_study.ecal_energy_min", NAN);
   const double ECalMaxE = config.GetValue("pulse_study.ecal_energy_max", NAN);
+  const bool applyECalEnergyMax = config.GetValue("pulse_study.apply_ecal_energy_max", 0) != 0;
+  const bool applyToTMax = config.GetValue("pulse_study.apply_tot_max", 0) != 0;
   const double ECalMinT = config.GetValue("pulse_study.ecal_time_min", NAN);
   const double ECalMaxT = config.GetValue("pulse_study.ecal_time_max", NAN);
   const double LeMin = config.GetValue("analysis.le_min", 0.02);
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
-  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 0) != 0;
+  const bool applyToTCut = config.GetValue("pulse_study.apply_tot_cut", 1) != 0;
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
   const double TotMax = config.GetValue("analysis.tot_max", 30.0);
   const double xRes = config.GetValue("analysis.x_difference_max", 0.08); // Existing rx-cut key.
@@ -2468,7 +2802,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
       !std::isfinite((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) ||
       std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) > std::numeric_limits<int>::max() - 2 ||
       !std::isfinite(ECalMinT) || !std::isfinite(ECalMaxT) || ECalMinT >= ECalMaxT ||
-      !std::isfinite(ECalMinE) || !std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE) {
+      !std::isfinite(ECalMinE) || (applyECalEnergyMax && (!std::isfinite(ECalMaxE) || ECalMinE >= ECalMaxE))) {
     std::cerr << "[CDet pulse background] Invalid ECal display settings or cuts.\n";
     return;
   }
@@ -2480,7 +2814,19 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   const int nDtBins = int(std::ceil((DtMax - DtMin) / BinWidth));
   const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
   const int nRxBins = int(std::ceil((RxMax - RxMin) / RxBinWidth));
-  const int nCDetTotBins = int(std::ceil((TotMax - TotMin) / BinWidth));
+  const double TotDisplayMin = config.GetValue("display.tot_min", 0.0);
+  const double TotDisplayMax = config.GetValue("display.tot_max", 60.0);
+  const double TotBinWidth = config.GetValue("pulse_study.tot_bin_width_ns", 1.0);
+  if (!std::isfinite(TotDisplayMin) || !std::isfinite(TotDisplayMax) || TotDisplayMin >= TotDisplayMax ||
+      !std::isfinite(TotBinWidth) || TotBinWidth <= 0.0 ||
+      !std::isfinite((TotDisplayMax-TotDisplayMin)/TotBinWidth) ||
+      std::ceil((TotDisplayMax-TotDisplayMin)/TotBinWidth) > std::numeric_limits<int>::max()-2 ||
+      !std::isfinite(TotMin) || TotMin < 0.0 ||
+      (applyToTMax && (!std::isfinite(TotMax) || TotMin >= TotMax))) {
+    std::cerr << "[CDet pulse background] Invalid ToT display or cut settings.\n";
+    return;
+  }
+  const int nCDetTotBins = int(std::ceil((TotDisplayMax - TotDisplayMin) / TotBinWidth));
   TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
   if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
   const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
@@ -2540,7 +2886,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   hCDetX = new TH1D("hPulseBackgroundCDetX", TString::Format("Bar %d: channel x;Channel CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
   hCDetXCorr = new TH1D("hPulseBackgroundCDetXCorr", TString::Format("Bar %d: aligned x;Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax);
   hCDetXCorrVsX = new TH2D("hPulseBackgroundCDetXCorrVsX", TString::Format("Bar %d: aligned x versus channel x;Channel CDet x (m);Aligned CDet x (m);Pulses", controlBar), nPositionBins, PositionMin, PositionMax, nPositionBins, PositionMin, PositionMax);
-  hCDetTotVsRx = new TH2D("hPulseBackgroundCDetTotVsRx", TString::Format("Bar %d Pixel %d: CDet Tot versus rx;rx (m);CDet Tot (ns);Pulses", controlBar, controlPixel), nRxBins, RxMin, RxMax, nCDetTotBins, TotMin, TotMax);
+  hCDetTotVsRx = new TH2D("hPulseBackgroundCDetTotVsRx", TString::Format("Bar %d Pixel %d: CDet Tot versus rx;rx (m);CDet Tot (ns);Pulses", controlBar, controlPixel), nRxBins, RxMin, RxMax, nCDetTotBins, TotDisplayMin, TotDisplayMax);
   hCDetTotVsRx->SetDirectory(nullptr);
   hDtVsRx->SetDirectory(nullptr);
   hDt->SetDirectory(nullptr);
@@ -2564,7 +2910,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
     const double y_ECal = vECalY[event];
 
     bool good_ecal_time = t_ECal >= ECalMinT && t_ECal <= ECalMaxT;
-    bool good_ecal_energy = e_ECal >= ECalMinE && e_ECal <= ECalMaxE;
+    bool good_ecal_energy = std::isfinite(e_ECal) && e_ECal >= ECalMinE && (!applyECalEnergyMax || e_ECal <= ECalMaxE);
     const bool good_ecal_event = good_ecal_time && good_ecal_energy;
     if (!good_ecal_event) continue;
     hECalT->Fill(t_ECal);
@@ -2595,7 +2941,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
       const bool goodCalib = vPulseGoodCalib[event][hit];
 
       bool good_cdet_le = leCorr >= LeMin && leCorr <= LeMax;
-      bool good_cdet_tot = tot >= TotMin && tot <= TotMax;
+      bool good_cdet_tot = std::isfinite(tot) && tot >= TotMin && (!applyToTMax || tot <= TotMax);
       const bool good_cdet_hit = good_cdet_le && good_cdet_tot; //good cdet hit condition
       if (!good_cdet_hit) continue;
       hDtVsRx->Fill(rx,dt);
