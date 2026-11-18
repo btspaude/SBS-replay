@@ -148,6 +148,9 @@ TH1D* hPulsePositionBarRx[2] = {};
 TH2D* hPulsePositionCorrelation[4][2][3] = {};
 // Direct coordinate differences: [L1/L2][raw x/corrected x].
 TH1D* hPulseLayerXDifference[2][2] = {};
+// Full-detector 1D positions: channel CDet x per pulse, native ECal x per selected event.
+TH1D* hPulsePositionCDetX = nullptr;
+TH1D* hPulsePositionECalX = nullptr;
 // Multiplicity is counted per event in the background routine's selected bar.
 TH1D* hPulseBackgroundRxMultiple = nullptr;
 TH1D* hPulseBackgroundRxSingle = nullptr;
@@ -2248,6 +2251,21 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
 
+  delete gROOT->GetListOfCanvases()->FindObject("cPulsePositionCDetX");
+  delete gROOT->GetListOfCanvases()->FindObject("cPulsePositionECalX");
+  delete hPulsePositionCDetX;
+  delete hPulsePositionECalX;
+  hPulsePositionCDetX = new TH1D("hPulsePositionCDetX",
+      TString::Format("%s, full detector: channel CDet x;Channel CDet x (m);Pulses", PulseStudyRunLabel(config, RunNumber).Data()),
+      nPositionBins, PositionMin, PositionMax);
+  hPulsePositionECalX = new TH1D("hPulsePositionECalX",
+      TString::Format("%s: native ECal x, events with accepted CDet pulses;ECal x at ECal (m);Events", PulseStudyRunLabel(config, RunNumber).Data()),
+      nPositionBins, PositionMin, PositionMax);
+  hPulsePositionCDetX->SetDirectory(nullptr);
+  hPulsePositionECalX->SetDirectory(nullptr);
+  hPulsePositionCDetX->SetStats(false);
+  hPulsePositionECalX->SetStats(false);
+
   // One pass through the aligned saved vectors. dt is already in ns.
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
@@ -2256,6 +2274,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     const bool good_ECal_time = std::isfinite(vECalAdcTime[event]) &&
         (!applyECalTimeCut || (vECalAdcTime[event] > ECalMinT && vECalAdcTime[event] < ECalMaxT));
     if (!good_ECal_energy || !good_ECal_time) continue;
+    bool eventHasSelectedPulse = false;
     for (size_t hit = 0; hit < vPulseID[event].size(); ++hit) {
       const double id = vPulseID[event][hit];
       const double dt = vPulseDt[event][hit];
@@ -2285,6 +2304,8 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         good_ellipse = good_x_res;
       }
       if (!good_le || !good_tot || !good_ellipse) continue;
+      eventHasSelectedPulse = true;
+      if (std::isfinite(vPulseX[event][hit])) hPulsePositionCDetX->Fill(vPulseX[event][hit]);
       // Fill once per accepted pulse, independent of the control/detector display groups.
       // These are coordinate differences, with no additional residual-offset subtraction.
       const int layer = int(id) / 1344;
@@ -2312,6 +2333,8 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
       }
       ++filledPulses;
     }
+    // Count each accepted event once, irrespective of pulse multiplicity or display bounds.
+    if (eventHasSelectedPulse && std::isfinite(vECalX[event])) hPulsePositionECalX->Fill(vECalX[event]);
   }
   // Zoom only the control-bar display, preserving the original fine bins and flow counts.
   // Native/projected ECal axes are independent. Raw/aligned x share occupied ranges.
@@ -2349,6 +2372,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
 
+  TPaveText* detectorCutLabel = nullptr;
   TPaveText* layerCutLabels[2] = {}; // Reuse the same cut annotations on the 1D plots below.
   // Six interactive canvases for the control bar, detector, and each layer.
   // The detector population includes each accepted pulse once, independent of bar choices.
@@ -2397,6 +2421,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         if (coordinate == 2) cuts->AddText("CDet y is the DB channel center, not a reconstructed interaction position");
         if (selected == 0) cuts->AddText(TString::Format("Control axes: occupied bins + %.3g m padding (at least one bin); display only", ControlPositionPadding));
         if (selected >= 2 && projected == 1 && coordinate == 0) layerCutLabels[selected-2] = cuts;
+        if (selected == 1 && projected == 0 && coordinate == 0) detectorCutLabel = cuts;
         cuts->Draw();
         canvas->Modified();
         canvas->Update();
@@ -2430,8 +2455,32 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
       canvas->SaveAs(TString::Format("%s/layer%d_%s_minus_ecal_projected.pdf", outputDirectory.Data(), layer+1, coordinateFiles[coordinate]));
     }
   }
+  TH1D* positionHistograms[] = {hPulsePositionCDetX, hPulsePositionECalX};
+  const char* positionCanvasNames[] = {"cPulsePositionCDetX", "cPulsePositionECalX"};
+  const char* positionFiles[] = {"detector_cdet_x.pdf", "detector_ecal_x_native.pdf"};
+  for (int position = 0; position < 2; ++position) {
+    TH1D* histogram = positionHistograms[position];
+    TCanvas* canvas = new TCanvas(positionCanvasNames[position], histogram->GetTitle(), 1200, 742);
+    canvas->SetCanvasSize(1200, 742);
+    canvas->SetTopMargin(0.40);
+    canvas->SetLeftMargin(0.12);
+    canvas->SetRightMargin(0.05);
+    histogram->SetLineColor(kBlue+1);
+    histogram->SetLineWidth(2);
+    histogram->SetMinimum(0.0);
+    histogram->SetMaximum(1.15*std::max(1.0, histogram->GetMaximum()));
+    histogram->Draw("HIST");
+    TPaveText* cuts = static_cast<TPaveText*>(detectorCutLabel->Clone("pulsePosition1DCuts"));
+    cuts->SetBit(kCanDelete);
+    cuts->AddText(position == 0 ? "One entry per accepted pulse; uses channel x (not x_corr)"
+        : "One entry per event with at least one accepted CDet pulse; ECal x is not projected");
+    cuts->Draw();
+    canvas->Modified();
+    canvas->Update();
+    canvas->SaveAs(outputDirectory + "/" + positionFiles[position]);
+  }
   std::cout << "[CDet position correlations] Selected " << filledPulses
-            << " detector pulses; twenty-eight canvases remain open (24 correlations + 4 layer x differences). In 2D plots, ECal is horizontal and CDet vertical.\n"
+            << " detector pulses; thirty canvases remain open (24 correlations + 4 layer x differences + 2 x spectra). In 2D plots, ECal is horizontal and CDet vertical.\n"
             << "  Same stored dt/rx cuts for raw/aligned x; no layer pairing. PDF output: " << outputDirectory << '\n';
 }
 
