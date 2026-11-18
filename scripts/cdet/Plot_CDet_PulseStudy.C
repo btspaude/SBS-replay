@@ -146,6 +146,8 @@ TH1D* hPulsePositionBarX[2] = {};
 TH1D* hPulsePositionBarRx[2] = {};
 // Position correlations: [control/detector/L1/L2][ECal native/projected][raw x/corrected x/DB y].
 TH2D* hPulsePositionCorrelation[4][2][3] = {};
+// Direct coordinate differences: [L1/L2][raw x/corrected x].
+TH1D* hPulseLayerXDifference[2][2] = {};
 // Multiplicity is counted per event in the background routine's selected bar.
 TH1D* hPulseBackgroundRxMultiple = nullptr;
 TH1D* hPulseBackgroundRxSingle = nullptr;
@@ -2177,6 +2179,15 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
       }
     }
   }
+  const double DifferenceMin = config.GetValue("pulse_study.position_difference_min_m", -0.20);
+  const double DifferenceMax = config.GetValue("pulse_study.position_difference_max_m", 0.20);
+  if (!std::isfinite(DifferenceMin) || !std::isfinite(DifferenceMax) || DifferenceMin >= DifferenceMax ||
+      !std::isfinite((DifferenceMax-DifferenceMin)/PositionBinWidth) ||
+      std::ceil((DifferenceMax-DifferenceMin)/PositionBinWidth) > std::numeric_limits<int>::max()-2) {
+    std::cerr << "[CDet position correlations] Invalid position-difference display range.\n";
+    return;
+  }
+  const int nDifferenceBins = int(std::ceil((DifferenceMax-DifferenceMin)/PositionBinWidth));
   const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
   const char* roles[4] = {"Control", "Detector", "Layer1", "Layer2"};
   const TString scopes[4] = {TString::Format("Control bar %d", controlBar),
@@ -2223,6 +2234,20 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
 
+  for (int layer = 0; layer < 2; ++layer) {
+    for (int coordinate = 0; coordinate < 2; ++coordinate) {
+      delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseLayer%d%sDifference", layer+1, coordinateNames[coordinate]));
+      delete hPulseLayerXDifference[layer][coordinate];
+      auto*& histogram = hPulseLayerXDifference[layer][coordinate];
+      histogram = new TH1D(TString::Format("hPulseLayer%d%sDifference", layer+1, coordinateNames[coordinate]),
+          TString::Format("%s, CDet layer %d: %s x - ECal projection;%s - x_{ECal,proj} (m);Pulses",
+              PulseStudyRunLabel(config, RunNumber).Data(), layer+1, coordinate ? "aligned" : "channel", coordinate ? "x_{corr}" : "x"),
+          nDifferenceBins, DifferenceMin, DifferenceMax);
+      histogram->SetDirectory(nullptr);
+      histogram->SetStats(false);
+    }
+  }
+
   // One pass through the aligned saved vectors. dt is already in ns.
   Long64_t filledPulses = 0;
   for (size_t event = 0; event < vPulseID.size(); ++event) {
@@ -2260,6 +2285,16 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         good_ellipse = good_x_res;
       }
       if (!good_le || !good_tot || !good_ellipse) continue;
+      // Fill once per accepted pulse, independent of the control/detector display groups.
+      // These are coordinate differences, with no additional residual-offset subtraction.
+      const int layer = int(id) / 1344;
+      const double xProj = vECalXProjection[event][hit];
+      const double xValues[] = {vPulseX[event][hit], vPulseXCorr[event][hit]};
+      for (int coordinate = 0; coordinate < 2; ++coordinate) {
+        const double difference = xValues[coordinate] - xProj;
+        if (std::isfinite(xProj) && std::isfinite(xValues[coordinate]) && std::isfinite(difference))
+          hPulseLayerXDifference[layer][coordinate]->Fill(difference);
+      }
       for (int selected = 0; selected < 4; ++selected) {
         if (selected == 0 && bar != controlBar) continue;
         // Logical IDs 0..1343 are L1; 1344..2687 are L2. No paired hits required.
@@ -2314,6 +2349,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
 
+  TPaveText* layerCutLabels[2] = {}; // Reuse the same cut annotations on the 1D plots below.
   // Six interactive canvases for the control bar, detector, and each layer.
   // The detector population includes each accepted pulse once, independent of bar choices.
   for (int selected = 0; selected < 4; ++selected) {
@@ -2360,6 +2396,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         cuts->AddText(projected ? "ECal projected to each pulse z; projection = ECal coordinate * z_{pixel}/z_{ECal}" : "ECal coordinate at ECal; no projection");
         if (coordinate == 2) cuts->AddText("CDet y is the DB channel center, not a reconstructed interaction position");
         if (selected == 0) cuts->AddText(TString::Format("Control axes: occupied bins + %.3g m padding (at least one bin); display only", ControlPositionPadding));
+        if (selected >= 2 && projected == 1 && coordinate == 0) layerCutLabels[selected-2] = cuts;
         cuts->Draw();
         canvas->Modified();
         canvas->Update();
@@ -2367,8 +2404,34 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
       }
     }
   }
+  double differenceMaximum = 1.0;
+  for (int layer = 0; layer < 2; ++layer)
+    for (int coordinate = 0; coordinate < 2; ++coordinate)
+      differenceMaximum = std::max(differenceMaximum, hPulseLayerXDifference[layer][coordinate]->GetMaximum());
+  for (int layer = 0; layer < 2; ++layer) {
+    for (int coordinate = 0; coordinate < 2; ++coordinate) {
+      TH1D* histogram = hPulseLayerXDifference[layer][coordinate];
+      TCanvas* canvas = new TCanvas(TString::Format("cPulseLayer%d%sDifference", layer+1, coordinateNames[coordinate]), histogram->GetTitle(), 1200, 742);
+      canvas->SetCanvasSize(1200, 742);
+      canvas->SetTopMargin(0.40);
+      canvas->SetLeftMargin(0.12);
+      canvas->SetRightMargin(0.05);
+      histogram->SetLineColor(layer == 0 ? kRed+1 : kBlue+1);
+      histogram->SetLineWidth(2);
+      histogram->SetMinimum(0.0);
+      histogram->SetMaximum(1.15*differenceMaximum);
+      histogram->Draw("HIST");
+      TPaveText* cuts = static_cast<TPaveText*>(layerCutLabels[layer]->Clone("pulsePositionDifferenceCuts"));
+      cuts->SetBit(kCanDelete);
+      cuts->AddText("Direct coordinate subtraction; no extra residual offset; display limits are not cuts");
+      cuts->Draw();
+      canvas->Modified();
+      canvas->Update();
+      canvas->SaveAs(TString::Format("%s/layer%d_%s_minus_ecal_projected.pdf", outputDirectory.Data(), layer+1, coordinateFiles[coordinate]));
+    }
+  }
   std::cout << "[CDet position correlations] Selected " << filledPulses
-            << " detector pulses; twenty-four canvases remain open (control, detector, L1, L2). ECal is on the horizontal axis, CDet on the vertical axis.\n"
+            << " detector pulses; twenty-eight canvases remain open (24 correlations + 4 layer x differences). In 2D plots, ECal is horizontal and CDet vertical.\n"
             << "  Same stored dt/rx cuts for raw/aligned x; no layer pairing. PDF output: " << outputDirectory << '\n';
 }
 
