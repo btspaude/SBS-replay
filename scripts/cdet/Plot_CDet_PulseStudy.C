@@ -10,7 +10,7 @@
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "first_pass");
 // Position/rx overlays (one visible canvas per bar):
 //   plotPulseStudyPositions("CDet_run6077_pulse_pixel_timing.conf", "positions", 19, 30);
-//   plotPulseStudyPositionCorrelations("CDet_run6077_pulse_pixel_timing.conf", "correlations", 19, 30);
+//   plotPulseStudyPositionCorrelations("CDet_run6077_pulse_pixel_timing.conf", "correlations", 30);
 //   plotPulseStudyBars("CDet_run6077_pulse_pixel_timing.conf", "bars_y", true);
 // Background plots, including matched rx canvases for multiple/single pulses in bar 30:
 //   plotPulseStudyBackground("CDet_run6077_pulse_pixel_timing.conf", "multiplicity", 19, 30);
@@ -144,8 +144,8 @@ TH2D* hPulseBar30LeVsECalTime[2] = {};
 // Separate position-overlay histograms: index 0 = study bar, 1 = control bar.
 TH1D* hPulsePositionBarX[2] = {};
 TH1D* hPulsePositionBarRx[2] = {};
-// Position correlations: [study/control][ECal native/projected][raw x/corrected x/DB y].
-TH2D* hPulsePositionCorrelation[2][2][3] = {};
+// Position correlations: [control/detector/L1/L2][ECal native/projected][raw x/corrected x/DB y].
+TH2D* hPulsePositionCorrelation[4][2][3] = {};
 // Multiplicity is counted per event in the background routine's selected bar.
 TH1D* hPulseBackgroundRxMultiple = nullptr;
 TH1D* hPulseBackgroundRxSingle = nullptr;
@@ -2093,7 +2093,7 @@ void plotPulseStudyPositions(const char* configFile = "CDet_run6077_pulse_pixel_
 // Native and projected ECal coordinates versus raw/aligned CDet x and DB y.
 // Same event/vector/cut architecture as plotPulseStudyBars; no layer pairing.
 void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
-                            const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1,
+                            const char* outputTag = nullptr, int controlBar = -1,
                             double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN)
 {
   TEnv config;
@@ -2102,11 +2102,15 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     std::cerr << "[CDet position correlations] Cannot read configuration with config.version: 1.\n";
     return;
   }
-  if (studyBar == -1) studyBar = config.GetValue("pulse_pixel_timing.study_bar", 19);
   if (controlBar == -1) controlBar = config.GetValue("pulse_pixel_timing.control_bar", 30);
   if (std::isnan(PositionBinWidth)) PositionBinWidth = config.GetValue("pulse_study.position_bin_width_m", 0.005);
   if (std::isnan(PositionMin)) PositionMin = config.GetValue("pulse_study.position_min_m", -1.6);
   if (std::isnan(PositionMax)) PositionMax = config.GetValue("pulse_study.position_max_m", 1.6);
+  const double ControlPositionPadding = config.GetValue("pulse_study.control_position_padding_m", 0.02);
+  if (!std::isfinite(ControlPositionPadding) || ControlPositionPadding < 0.0) {
+    std::cerr << "[CDet position correlations] Control-position padding must be finite and nonnegative.\n";
+    return;
+  }
   const double LeMin = config.GetValue("analysis.le_min", 0.02);
   const double LeMax = config.GetValue("analysis.le_max", 60.0);
   const double TotMin = config.GetValue("analysis.tot_min", 4.0);
@@ -2143,7 +2147,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     std::cerr << "[CDet position correlations] Invalid ellipse settings; radius -1 disables it.\n";
     return;
   }
-  if (studyBar < 0 || studyBar >= numBars || controlBar < 0 || controlBar >= numBars ||
+  if (controlBar < 0 || controlBar >= numBars ||
       !std::isfinite(PositionBinWidth) || PositionBinWidth <= 0 ||
       !std::isfinite(PositionMin) || !std::isfinite(PositionMax) || PositionMin >= PositionMax ||
       !std::isfinite((PositionMax - PositionMin) / PositionBinWidth) ||
@@ -2174,8 +2178,11 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
   const int nPositionBins = int(std::ceil((PositionMax - PositionMin) / PositionBinWidth));
-  const int bars[2] = {studyBar, controlBar};
-  const char* roles[2] = {"Study", "Control"};
+  const char* roles[4] = {"Control", "Detector", "Layer1", "Layer2"};
+  const TString scopes[4] = {TString::Format("Control bar %d", controlBar),
+      "Full detector (both layers)", "CDet layer 1 (bars 0-83)", "CDet layer 2 (bars 84-167)"};
+  const TString filePrefixes[4] = {TString::Format("bar%03d_Control", controlBar),
+      "detector", "layer1", "layer2"};
   TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
   if (tag.IsNull()) tag = TString::Format("run%d", config.GetValue("analysis.run_number", 0));
   const TString allowedTagCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
@@ -2200,7 +2207,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
   const char* cdetLabels[] = {"Channel CDet x (m)", "Aligned CDet x (m)", "DB CDet y (m)"};
   const char* ecalNames[] = {"Native", "Projected"};
   // Replace this routine's plots on each call, then define, fill, and draw.
-  for (int selected = 0; selected < 2; ++selected) {
+  for (int selected = 0; selected < 4; ++selected) {
     for (int projected = 0; projected < 2; ++projected) {
       for (int coordinate = 0; coordinate < 3; ++coordinate) {
         delete gROOT->GetListOfCanvases()->FindObject(TString::Format("cPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]));
@@ -2208,7 +2215,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         const TString ecalLabel = TString::Format("ECal %s%s (m)", coordinate == 2 ? "y" : "x", projected ? " projected to pixel z" : " at ECal");
         auto*& histogram = hPulsePositionCorrelation[selected][projected][coordinate];
         histogram = new TH2D(TString::Format("hPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]),
-            TString::Format("%s, bar %d: %s vs ECal;%s;%s;Pulses", PulseStudyRunLabel(config, RunNumber).Data(), bars[selected], coordinateNames[coordinate], ecalLabel.Data(), cdetLabels[coordinate]),
+            TString::Format("%s, %s: %s vs ECal;%s;%s;Pulses", PulseStudyRunLabel(config, RunNumber).Data(), scopes[selected].Data(), coordinateNames[coordinate], ecalLabel.Data(), cdetLabels[coordinate]),
             nPositionBins, PositionMin, PositionMax, nPositionBins, PositionMin, PositionMax);
         histogram->SetDirectory(nullptr);
         histogram->SetStats(false);
@@ -2231,7 +2238,6 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
           std::floor(id) != id || !std::isfinite(dt)) continue;
       const int bar = int(id) / pixelsPerBar;
 
-      if (bar != studyBar && bar != controlBar) continue;
       // All saved timing vectors used here are in ns.
       const double le = vPulseLe[event][hit];
       const double totNs = vPulseToT[event][hit];
@@ -2254,8 +2260,10 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         good_ellipse = good_x_res;
       }
       if (!good_le || !good_tot || !good_ellipse) continue;
-      for (int selected = 0; selected < 2; ++selected) {
-        if (bar != bars[selected]) continue;
+      for (int selected = 0; selected < 4; ++selected) {
+        if (selected == 0 && bar != controlBar) continue;
+        // Logical IDs 0..1343 are L1; 1344..2687 are L2. No paired hits required.
+        if (selected >= 2 && int(id) / 1344 != selected - 2) continue;
         const double cdet[] = {vPulseX[event][hit], vPulseXCorr[event][hit], vPulseY[event][hit]};
         for (int projected = 0; projected < 2; ++projected) {
           const double ecalX = projected ? vECalXProjection[event][hit] : vECalX[event];
@@ -2270,10 +2278,56 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
       ++filledPulses;
     }
   }
-  // Six separate interactive canvases per bar, with the same axes for comparisons.
-  for (int selected = 0; selected < 2; ++selected) {
+  // Zoom only the control-bar display, preserving the original fine bins and flow counts.
+  // Native/projected ECal axes are independent. Raw/aligned x share occupied ranges.
+  for (int projected = 0; projected < 2; ++projected) {
+    int firstX[3], lastX[3] = {}, firstY[3], lastY[3] = {};
+    for (int coordinate = 0; coordinate < 3; ++coordinate) {
+      TH2D* hist = hPulsePositionCorrelation[0][projected][coordinate];
+      firstX[coordinate] = hist->GetNbinsX() + 1;
+      firstY[coordinate] = hist->GetNbinsY() + 1;
+      for (int ix = 1; ix <= hist->GetNbinsX(); ++ix) {
+        for (int iy = 1; iy <= hist->GetNbinsY(); ++iy) {
+          if (hist->GetBinContent(ix, iy) <= 0.0) continue;
+          firstX[coordinate] = std::min(firstX[coordinate], ix);
+          lastX[coordinate] = std::max(lastX[coordinate], ix);
+          firstY[coordinate] = std::min(firstY[coordinate], iy);
+          lastY[coordinate] = std::max(lastY[coordinate], iy);
+        }
+      }
+    }
+    firstX[0] = firstX[1] = std::min(firstX[0], firstX[1]);
+    lastX[0] = lastX[1] = std::max(lastX[0], lastX[1]);
+    firstY[0] = firstY[1] = std::min(firstY[0], firstY[1]);
+    lastY[0] = lastY[1] = std::max(lastY[0], lastY[1]);
+    for (int coordinate = 0; coordinate < 3; ++coordinate) {
+      TH2D* hist = hPulsePositionCorrelation[0][projected][coordinate];
+      auto zoomAxis = [&](TAxis* axis, int first, int last) {
+        if (last < first) return; // Empty plots retain the configured detector range.
+        const int paddingBins = int(std::min(double(axis->GetNbins()),
+            std::max(1.0, std::ceil(ControlPositionPadding / axis->GetBinWidth(1)))));
+        axis->SetRange(std::max(1, first-paddingBins), std::min(axis->GetNbins(), last+paddingBins));
+        axis->SetNdivisions(505, false); // Keep closely spaced decimal tick labels readable.
+      };
+      zoomAxis(hist->GetXaxis(), firstX[coordinate], lastX[coordinate]);
+      zoomAxis(hist->GetYaxis(), firstY[coordinate], lastY[coordinate]);
+    }
+  }
+
+  // Six interactive canvases for the control bar, detector, and each layer.
+  // The detector population includes each accepted pulse once, independent of bar choices.
+  for (int selected = 0; selected < 4; ++selected) {
     for (int projected = 0; projected < 2; ++projected) {
-      const double xColorMax = std::max(1.0, std::max(hPulsePositionCorrelation[selected][projected][0]->GetMaximum(), hPulsePositionCorrelation[selected][projected][1]->GetMaximum()));
+      double xColorMax = std::max(1.0, std::max(hPulsePositionCorrelation[selected][projected][0]->GetMaximum(), hPulsePositionCorrelation[selected][projected][1]->GetMaximum()));
+      double yColorMax = std::max(1.0, hPulsePositionCorrelation[selected][projected][2]->GetMaximum());
+      // Match L1/L2 color scales as well as axes, for direct count comparisons.
+      if (selected >= 2) {
+        for (int layer = 2; layer < 4; ++layer) {
+          for (int coordinate = 0; coordinate < 2; ++coordinate)
+            xColorMax = std::max(xColorMax, hPulsePositionCorrelation[layer][projected][coordinate]->GetMaximum());
+          yColorMax = std::max(yColorMax, hPulsePositionCorrelation[layer][projected][2]->GetMaximum());
+        }
+      }
       for (int coordinate = 0; coordinate < 3; ++coordinate) {
         TH2D* histogram = hPulsePositionCorrelation[selected][projected][coordinate];
         TCanvas* canvas = new TCanvas(TString::Format("cPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]), histogram->GetTitle(), 1200, 742);
@@ -2283,6 +2337,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         canvas->SetRightMargin(0.15);
         histogram->SetMinimum(0.0);
         if (coordinate < 2) histogram->SetMaximum(xColorMax);
+        else if (selected >= 2) histogram->SetMaximum(yColorMax);
         histogram->Draw("COLZ");
         TPaveText* cuts = new TPaveText(0.10, 0.63, 0.96, 0.92, "NDC");
         cuts->SetName("pulseCorrelationCuts");
@@ -2292,7 +2347,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         cuts->SetTextAlign(12);
         cuts->SetTextFont(42);
         cuts->SetTextSize(0.018);
-        cuts->AddText(TString::Format("%s; %s bar %d; all pixels", PulseStudyRunLabel(config, RunNumber).Data(), roles[selected], bars[selected]));
+        cuts->AddText(TString::Format("%s; %s; all pixels", PulseStudyRunLabel(config, RunNumber).Data(), scopes[selected].Data()));
         cuts->AddText(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable" : pulseStudyLoadingECalCuts.Data());
         cuts->AddText(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable" : pulseStudyLoadingPulseCuts.Data());
         cuts->AddText(applyECalEnergyCut ? ("Secondary: " + PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax)) : TString("Secondary ECal energy cut: off"));
@@ -2304,15 +2359,16 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         cuts->AddText("Selection uses stored dt/rx for every plot; finite plotted coordinates required");
         cuts->AddText(projected ? "ECal projected to each pulse z; projection = ECal coordinate * z_{pixel}/z_{ECal}" : "ECal coordinate at ECal; no projection");
         if (coordinate == 2) cuts->AddText("CDet y is the DB channel center, not a reconstructed interaction position");
+        if (selected == 0) cuts->AddText(TString::Format("Control axes: occupied bins + %.3g m padding (at least one bin); display only", ControlPositionPadding));
         cuts->Draw();
         canvas->Modified();
         canvas->Update();
-        canvas->SaveAs(TString::Format("%s/bar%03d_%s_%s_vs_ecal_%s.pdf", outputDirectory.Data(), bars[selected], roles[selected], coordinateFiles[coordinate], projected ? "projected" : "native"));
+        canvas->SaveAs(TString::Format("%s/%s_%s_vs_ecal_%s.pdf", outputDirectory.Data(), filePrefixes[selected].Data(), coordinateFiles[coordinate], projected ? "projected" : "native"));
       }
     }
   }
   std::cout << "[CDet position correlations] Selected " << filledPulses
-            << " pulses; twelve canvases remain open. ECal is on the horizontal axis, CDet on the vertical axis.\n"
+            << " detector pulses; twenty-four canvases remain open (control, detector, L1, L2). ECal is on the horizontal axis, CDet on the vertical axis.\n"
             << "  Same stored dt/rx cuts for raw/aligned x; no layer pairing. PDF output: " << outputDirectory << '\n';
 }
 
