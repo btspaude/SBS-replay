@@ -130,6 +130,8 @@ Upper ECal-energy and ToT limits can now be disabled in PulseStudy while retaini
 | `pulse_study.apply_tot_max` | 0 | Secondary ToT upper cut off |
 | `analysis.le_max` | **30 ns in both configs** | Raw-LE maximum, explicitly adopted in this update |
 
+PulseStudy loading now replaces replay `spatial_pass` with explicit finite-residual checks: `abs(rx) <= analysis.x_difference_max` and `abs(ry) <= 0.36 m`. The x bound defaults to 0.08 m and can be widened in the config; rerun the main analysis to refill vectors. Replay ECal eligibility and calibration validity remain required. The captured loading-cut report records the actual rx/ry limits, even if the config is edited before plotting.
+
 Loading ECal-energy and ToT lower bounds remain active. Secondary lower windows have their existing toggles. Secondary upper cuts require the corresponding secondary window to be enabled. Display maxima do not enable selection cuts.
 
 For a ToT-upper-cut scan without reloading, load with `analysis.apply_tot_max: 0`, enable `pulse_study.apply_tot_cut` and `pulse_study.apply_tot_max`, then vary `analysis.tot_max` between plotting calls.
@@ -169,7 +171,7 @@ An event qualifies when it has at least one bar-30 pulse passing the secondary E
 
 Every qualifying bar-30 pulse is combined with every saved L2 pulse in that same event. L2 gets loading cuts only: no additional secondary dt, rx, LE, or ToT selection. Finite coordinates are required separately for each coordinate version. Multiple qualifying bar-30 pulses produce all combinations; these are not replay-matched pairs or confirmed tracks, and counts are combinations rather than events.
 
-The new layer-difference display keys are `pulse_study.layer_difference_min_m/max_m`, currently -3.2 to +3.2 m, using the position bin width. Display boundaries do not discard combinations. Older configs missing the position dt bounds fall back to `fit_signal_min/max`.
+The new layer-difference display keys are `pulse_study.layer_difference_min_m/max_m`, currently -1.6 to +1.6 m (narrowed from the initial ±3.2 m), using the position bin width. Display boundaries do not discard combinations. Older configs missing the position dt bounds fall back to `fit_signal_min/max`.
 
 ### Bar-30 multiplicity
 

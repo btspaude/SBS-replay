@@ -235,7 +235,7 @@ bool PulseStudyWriteCutReport(const TString& path, const char* routine,
   report << "\nLOADING CUTS (recorded when the saved sample was loaded)\n";
   line(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable; rerun the main macro to record them." : pulseStudyLoadingECalCuts);
   line(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable; rerun the main macro to record them." : pulseStudyLoadingPulseCuts);
-  report << "Loading requires pulse.ecal_eligible, pulse.spatial_pass and pulse.calib_valid > 0.5.\n"
+  report << "Loading requires pulse.ecal_eligible and pulse.calib_valid > 0.5; spatial bounds are recorded above.\n"
          << "Saved events have at least one pulse passing loading cuts.\n"
          << "Secondary routines cannot recover pulses/events rejected during loading.\n"
          << "\nSELECTION IN THIS ROUTINE\n";
@@ -361,6 +361,8 @@ void Plot_CDet_PulseStudy(
   const double ellipseTimeCenter = config.GetValue("good_pulse.single_timing_center_ns", -26.0);
   const double ellipseXScale = config.GetValue("good_pulse.single_residual_scale_m", 0.040);
   const double ellipseTimeScale = config.GetValue("good_pulse.single_timing_scale_ns", 5.0);
+  const double RxMax = config.GetValue("analysis.x_difference_max", 0.08);
+  const double RyMax = 0.36; // m; retain the previous y window while allowing wider rx.
   const bool applyToTCut = ApplyToTCut != 0;
   const bool useEllipse = EllipseRadius > 0.0;
   // Reject events outside the configured ECal ADC-time window before the hit loop.
@@ -386,6 +388,11 @@ void Plot_CDet_PulseStudy(
        !std::isfinite(ellipseXScale) || !std::isfinite(ellipseTimeScale) ||
        ellipseXScale <= 0.0 || ellipseTimeScale <= 0.0))) {
     std::cerr << "[CDet pulse study] Invalid ellipse settings; radius -1 disables it.\n";
+    return;
+  }
+
+  if (!std::isfinite(RxMax) || RxMax <= 0.0) {
+    std::cerr << "[CDet pulse study] analysis.x_difference_max must be finite and positive (m).\n";
     return;
   }
 
@@ -418,7 +425,7 @@ void Plot_CDet_PulseStudy(
   pulseStudyLoadingECalCuts = "Loading: " + PulseStudyEnergyCutLabel(ECalMinE, ECalMaxE, applyECalEnergyMax)
       + TString::Format(", %.12g < t_{ECal} < %.12g ns", ECalMinT, ECalMaxT);
   pulseStudyLoadingPulseCuts = "Loading: " + PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax, false)
-      + TString::Format("; %.12g < LE < %.12g ns; eligible, spatial, calib flags", LeMin, LeMax);
+      + TString::Format("; %.12g < LE < %.12g ns; finite |rx| <= %.12g m, |ry| <= %.12g m; ecal_eligible and calib_valid > 0.5; replay spatial_pass not required", LeMin, LeMax, RxMax, RyMax);
   hECalAdcTime = new TH1D("hECalAdcTime", TString::Format("%s: ECal ADC time, saved events;ECal ADC time (ns);Events", PulseStudyRunLabel(config, RunNumber).Data()), int(std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth)), ECalDisplayMin, ECalDisplayMax);
   hECalAdcTime->SetDirectory(nullptr);
 
@@ -447,7 +454,6 @@ void Plot_CDet_PulseStudy(
   TTreeReaderArray<double> PulseYResiduals(reader, "earm.cdet.pulse.ecal_y_residual");
   TTreeReaderArray<double> PulseDt(reader, "earm.cdet.pulse.ecal_residual");
   TTreeReaderArray<double> PulseECalEligible(reader, "earm.cdet.pulse.ecal_eligible");
-  TTreeReaderArray<double> PulseSpatialPass(reader, "earm.cdet.pulse.spatial_pass");
 
   vECalE.reserve(limit);
   vPulseStudyDenominatorECalE.reserve(limit);
@@ -477,7 +483,7 @@ void Plot_CDet_PulseStudy(
             << "  LE: " << LeMin << " < LE < " << LeMax << " ns\n"
             << "  Loading: " << PulseStudyToTCutLabel(TotMin, TotMax, applyToTMax, false) << "\n"
             << "  Ellipse radius: " << EllipseRadius << " (-1 = off).\n"
-            << "  Loading requires ECal energy/time, replay eligibility/spatial/calibration flags, ToT, and LE.\n";
+            << "  Loading requires ECal energy/time, replay eligibility/calibration flags, explicit rx/ry cuts, ToT, and LE.\n";
 
   // 4. ONE EVENT LOOP. Save values here; do histogram filling later.
   Long64_t EventCounter = 0;
@@ -517,7 +523,10 @@ void Plot_CDet_PulseStudy(
     for (size_t hit = 0; hit < PulseID.GetSize(); ++hit) {
       // CDet Hit Cuts
       bool good_ecal_eligible = PulseECalEligible[hit] > 0.5;
-      bool good_spatial_pass = PulseSpatialPass[hit] > 0.5;
+      const double rx = PulseXResiduals[hit];
+      const double ry = PulseYResiduals[hit];
+      bool good_spatial_pass = std::isfinite(rx) && std::isfinite(ry) &&
+          std::abs(rx) <= RxMax && std::abs(ry) <= RyMax;
       bool good_calibration = PulseGoodCalib[hit] > 0.5;
       bool good_pulse_tot = std::isfinite(PulseToT[hit]) && PulseToT[hit] > TotMin && (!applyToTMax || PulseToT[hit] < TotMax);
       const double leNs = 0.01 * PulseLe[hit];
@@ -584,7 +593,7 @@ void Plot_CDet_PulseStudy(
   cECalTime->Update();
   if (!gSystem->AccessPathName("PusleStudy") || gSystem->mkdir("PusleStudy", true) == 0) {
     if (!PulseStudyWriteCutReport(TString::Format("PusleStudy/run%d_loading_cuts.txt", RunNumber), "Plot_CDet_PulseStudy", configFile, config,
-        {"Loading cuts above; no ellipse or additional rectangular rx cut in the main loop.",
+        {"Explicit loading rx/ry bounds above replace replay spatial_pass; no ellipse in the main loop.",
          "ToT lower bound is always applied, regardless of ApplyToTCut. ECal energy/time and raw LE windows use strict inequalities.",
          "The ECal histogram counts events with at least one accepted CDet pulse."},
         {TString::Format("Segments %d..%d; requested events %lld; processed events %lld; saved events %zu", minSeg, maxSeg, nevents, EventCounter, vPulseID.size()),
@@ -2283,8 +2292,8 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     std::cerr << "[CDet position correlations] Invalid position-difference display range.\n";
     return;
   }
-  const double LayerDifferenceMin = config.GetValue("pulse_study.layer_difference_min_m", PositionMin-PositionMax);
-  const double LayerDifferenceMax = config.GetValue("pulse_study.layer_difference_max_m", PositionMax-PositionMin);
+  const double LayerDifferenceMin = config.GetValue("pulse_study.layer_difference_min_m", -1.6);
+  const double LayerDifferenceMax = config.GetValue("pulse_study.layer_difference_max_m", 1.6);
   if (!std::isfinite(LayerDifferenceMin) || !std::isfinite(LayerDifferenceMax) || LayerDifferenceMin >= LayerDifferenceMax ||
       !std::isfinite((LayerDifferenceMax-LayerDifferenceMin)/PositionBinWidth) ||
       std::ceil((LayerDifferenceMax-LayerDifferenceMin)/PositionBinWidth) > std::numeric_limits<int>::max()-2) {
@@ -3231,7 +3240,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
         TString::Format("Corrected LE (not raw): %.12g <= LE_corr <= %.12g ns", LeMin, LeMax),
         TString::Format("Finite ToT >= %.12g ns; upper bound %s", TotMin, applyToTMax ? TString::Format("<= %.12g ns", TotMax).Data() : "off"),
         "ECal energy/time and ToT windows above are always applied here, regardless of their secondary apply_*_cut toggles; apply_*_max toggles still control upper energy/ToT bounds.",
-        "No secondary rx or ellipse cut. Loading spatial flag still applies.",
+        "No secondary rx or ellipse cut. Loading rx/ry cuts still apply.",
         TString::Format("Valid integer pulse ID; bar == %d. Multiplicity counted over ALL selected pixels in this bar before the pixel filter.", controlBar),
         TString::Format("Single/multiple rx and dt-vs-rx plus ToT-vs-rx plots retain local pixel == %d; finite rx (and finite dt for dt-vs-rx). N=1 versus N>=2.", controlPixel)
       }, {
