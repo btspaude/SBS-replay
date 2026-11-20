@@ -170,6 +170,7 @@ TH1D* hPulsePositionECalX = nullptr;
 TH2Poly* hPulseDetectorMap[2] = {};
 TH2Poly* hPulseEventMap[2] = {};
 TH1D* hPulseEventBarHits = nullptr;
+TH2D* hPulseECalMap = nullptr; // Native cluster position, one entry per ECal-selected event.
 
 // Multiplicity is counted per event in the background routine's selected bar.
 TH1D* hPulseBackgroundRxMultiple = nullptr;
@@ -188,6 +189,7 @@ TString pulseStudyLoadingPulseCuts;
 // Denominator sample: every event passing the loading ECal cuts, INCLUDING
 // events with no accepted CDet pulse. These do not share the pulse-vector index.
 std::vector<double> vPulseStudyDenominatorECalE, vPulseStudyDenominatorECalTime;
+std::vector<double> vPulseStudyDenominatorECalX, vPulseStudyDenominatorECalY;
 bool pulseStudyDenominatorReady = false;
 
 //-------HCal Vectors ---------
@@ -301,10 +303,11 @@ void PulseStudySaveCanvas(TCanvas* canvas, const TString& filename)
   const bool multiplicity = position && name == "cPulseBar30Multiplicity";
   const bool eventMap = pulseStudyPlotRoutine == "plotPulseStudyEventMaps";
   const bool singleEvent = eventMap && (name.BeginsWith("cPulseEventMap") || name == "cPulseEventBarHits");
-  const bool ecalOnly = name == "cPulseBackgroundECalTime";
+  const bool allEcalMap = name == "cPulseECalMap";
+  const bool ecalOnly = name == "cPulseBackgroundECalTime" || allEcalMap;
   TString secondaryTiming = multiplicity || ecalOnly ? pulseStudyPlotECalTiming : pulseStudyPlotSecondaryTiming;
   if (layers) secondaryTiming += "; bar 30 " + pulseStudyPlotDtWindow + "; L2: loading only";
-  else if ((position && !multiplicity && pulseStudyPlotPositionDt) || (eventMap && (singleEvent || pulseStudyPlotPositionDt)))
+  else if ((position && !multiplicity && pulseStudyPlotPositionDt) || (eventMap && !allEcalMap && (singleEvent || pulseStudyPlotPositionDt)))
     secondaryTiming += "; " + pulseStudyPlotDtWindow;
   else if (position || eventMap) secondaryTiming += "; no secondary dt window";
   if (name == "cPulsePeakYieldVsBar") secondaryTiming += TString::Format("; peak: #mu #pm %.3g#sigma", pulseStudyPlotPeakNSigma);
@@ -312,9 +315,9 @@ void PulseStudySaveCanvas(TCanvas* canvas, const TString& filename)
   if (layers) secondaryPosition = "bar 30: " + secondaryPosition + "; L2: none";
   std::vector<TString> lines = {
       pulseStudyPlotEnergy,
-      "Timing (load): " + pulseStudyPlotLoadingTiming,
+      "Timing (load): " + (allEcalMap ? (pulseStudyLoadedPlotCuts.known ? PulseStudyWindow("t_{E}", pulseStudyLoadedPlotCuts.timeMin, pulseStudyLoadedPlotCuts.timeMax, "ns", false) : TString("unknown")) : pulseStudyPlotLoadingTiming),
       "Timing (secondary): " + (secondaryTiming.IsNull() ? TString("none") : secondaryTiming),
-      "Position (load): " + pulseStudyPlotLoadingPosition + "; secondary: " + secondaryPosition
+      allEcalMap ? TString("Position: finite native ECal x/y; no CDet selection") : "Position (load): " + pulseStudyPlotLoadingPosition + "; secondary: " + secondaryPosition
   };
   if (name.Contains("CutComparison"))
     lines.push_back("Before-LE / before-ToT panels omit that secondary window; loading cuts remain.");
@@ -349,7 +352,7 @@ void PulseStudySaveCanvas(TCanvas* canvas, const TString& filename)
 bool PulseStudyWriteCutReport(const TString& path, const char* routine,
                               const char* configFile, TEnv& config,
                               const std::vector<TString>& selection,
-                              const std::vector<TString>& details = {})
+                              const std::vector<TString>& details = {}, bool ecalOnly = false)
 {
   PulseStudyPreparePlotCuts(routine, config);
   std::ofstream report(path.Data());
@@ -368,10 +371,12 @@ bool PulseStudyWriteCutReport(const TString& path, const char* routine,
   line(PulseStudyRunLabel(config, pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0)));
   report << "\nLOADING CUTS (recorded when the saved sample was loaded)\n";
   line(pulseStudyLoadingECalCuts.IsNull() ? "Loading ECal cuts: metadata unavailable; rerun the main macro to record them." : pulseStudyLoadingECalCuts);
-  line(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable; rerun the main macro to record them." : pulseStudyLoadingPulseCuts);
-  report << "Loading requires pulse.ecal_eligible and pulse.calib_valid > 0.5; spatial bounds are recorded above.\n"
-         << "Saved events have at least one pulse passing loading cuts.\n"
-         << "Secondary routines cannot recover pulses/events rejected during loading.\n"
+  if (!ecalOnly) line(pulseStudyLoadingPulseCuts.IsNull() ? "Loading pulse cuts: metadata unavailable; rerun the main macro to record them." : pulseStudyLoadingPulseCuts);
+  if (ecalOnly) report << "ECal opportunity sample: includes events with no accepted CDet pulse; no loading CDet cuts apply.\n";
+  else report << "Loading requires pulse.ecal_eligible and pulse.calib_valid > 0.5; spatial bounds are recorded above.\n"
+              << "Saved pulse events have at least one pulse passing loading cuts.\n";
+  report << "Secondary routines cannot recover events rejected by the loading ECal cuts.\n"
+         << (ecalOnly ? "" : "Secondary routines cannot recover pulses rejected during loading.\n")
          << "\nSELECTION IN THIS ROUTINE\n";
   for (const auto& text : selection) line(text);
   report << "\nPLOT / FIT SETTINGS AND EXCEPTIONS\n";
@@ -418,6 +423,8 @@ void ClearPulseStudyVectors()
 {
   vPulseStudyDenominatorECalE.clear();
   vPulseStudyDenominatorECalTime.clear();
+  vPulseStudyDenominatorECalX.clear();
+  vPulseStudyDenominatorECalY.clear();
   pulseStudyDenominatorReady = false;
   vHCalAdcTime.clear();
   delete gROOT->GetListOfCanvases()->FindObject("cPulseStudyECalAdcTime");
@@ -596,6 +603,8 @@ void Plot_CDet_PulseStudy(
   vECalE.reserve(limit);
   vPulseStudyDenominatorECalE.reserve(limit);
   vPulseStudyDenominatorECalTime.reserve(limit);
+  vPulseStudyDenominatorECalX.reserve(limit);
+  vPulseStudyDenominatorECalY.reserve(limit);
   vECalAdcTime.reserve(limit);
   vECalX.reserve(limit);
   vECalY.reserve(limit);
@@ -637,10 +646,12 @@ void Plot_CDet_PulseStudy(
     bool good_ECal_event = good_ECal_energy && good_ECal_time;
     if (!good_ECal_event) continue;
 
-    // Count the ECal opportunity before requiring any CDet hit. Keep energy/time
-    // so secondary cuts can be applied to this denominator as well as the pulses.
+    // Save every ECal opportunity before requiring any CDet hit. Energy/time
+    // support secondary cuts; native positions also support an unbiased ECal map.
     vPulseStudyDenominatorECalE.push_back(*ECalE);
     vPulseStudyDenominatorECalTime.push_back(*ECalAdcTime);
+    vPulseStudyDenominatorECalX.push_back(*ECalX);
+    vPulseStudyDenominatorECalY.push_back(*ECalY);
 
     // Fresh pulse vectors for this event. Projections are per pulse too.
     std::vector<double> thisEventECalXProjection;
@@ -2477,7 +2488,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         "Raw/corrected CDet x vs projected ECal x overlays: ProfileX mean CDet x in each ECal-x bin, with errors on the mean, computed from regular TH2 bins (bin-center approximation; excludes under/overflow).",
         "CDet y is the DB channel center; x-minus-projection spectra use direct subtraction, without an extra residual offset.",
         "1D channel CDet x: one entry per accepted pulse. 1D native ECal x: one entry per saved event with an accepted pulse, not weighted by pulse multiplicity.",
-        "The additional channel-CDet-x / native-ECal-x overlay retains these counts without normalization; blue counts pulses, red counts events.",
+        "The additional channel-CDet-x / native-ECal-x overlay scales the red ECal curve by (maximum CDet bin count)/(maximum ECal bin count), using regular bins only. The legend reports the factor; empty peaks use factor 1. Only the drawn ECal copy is scaled; the individual histograms retain their original pulse/event counts.",
         "Y timing correction OFF. New layer plots are same-event pulse combinations, not replay pair-branch matches.",
         TString::Format("Layer-combination gate: at least one L1 bar-30 pulse passing secondary ECal, raw-LE, ToT and rx/ellipse cuts AND %.12g <= stored dt <= %.12g ns. This gate is ALWAYS applied, regardless of position_apply_dt_cut.", DtCutMin, DtCutMax),
         "Combine EVERY qualifying bar-30 pulse with EVERY saved L2 pulse in the same event (IDs 1344..2687), including L2 pulses outside the dt peak or failing secondary pulse cuts. L2 has loading cuts only; event ECal cuts still apply.",
@@ -2848,13 +2859,18 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
   xOverlay->SetCanvasSize(1200, 742); xOverlay->SetTopMargin(.10); xOverlay->SetLeftMargin(.12); xOverlay->SetRightMargin(.05);
   TH1* cdetX = hPulsePositionCDetX->DrawCopy("HIST", "_overlay");
   TH1* ecalX = hPulsePositionECalX->DrawCopy("HIST SAME", "_overlay");
-  cdetX->SetTitle(TString::Format("%s: channel CDet x and native ECal x;Position x (m);Counts (CDet pulses / ECal events)", PulseStudyRunLabel(config, RunNumber).Data()));
-  cdetX->SetMaximum(1.45*std::max(1.,std::max(hPulsePositionCDetX->GetBinContent(hPulsePositionCDetX->GetMaximumBin()), hPulsePositionECalX->GetBinContent(hPulsePositionECalX->GetMaximumBin()))));
+  const double cdetPeak = hPulsePositionCDetX->GetBinContent(hPulsePositionCDetX->GetMaximumBin());
+  const double ecalPeak = hPulsePositionECalX->GetBinContent(hPulsePositionECalX->GetMaximumBin());
+  const bool scaleECal = cdetPeak > 0. && ecalPeak > 0.;
+  const double ecalScale = scaleECal ? cdetPeak/ecalPeak : 1.;
+  ecalX->Scale(ecalScale); // Display copy only: preserve the original event counts.
+  cdetX->SetTitle(TString::Format("%s: channel CDet x and native ECal x;Position x (m);Counts (ECal scaled to CDet peak)", PulseStudyRunLabel(config, RunNumber).Data()));
+  cdetX->SetMaximum(1.45*std::max(1.,std::max(cdetPeak,ecalPeak*ecalScale)));
   cdetX->SetLineColor(kBlue+1); ecalX->SetLineColor(kRed+1);
   TLegend* xLegend = new TLegend(.55,.76,.94,.88);
   xLegend->SetBit(kCanDelete); xLegend->SetBorderSize(0); xLegend->SetFillColor(kWhite);
   xLegend->AddEntry(cdetX,"Channel CDet x (per pulse)","l");
-  xLegend->AddEntry(ecalX,"Native ECal x (per event)","l"); xLegend->Draw();
+  xLegend->AddEntry(ecalX,scaleECal ? TString::Format("Native ECal x #times %.3g",ecalScale) : TString("Native ECal x (no peak to scale)"),"l"); xLegend->Draw();
   PulseStudySaveCanvas(xOverlay, outputDirectory + "/detector_cdet_x_and_ecal_x_native.pdf");
 
   std::cout << "[CDet position correlations] Selected " << filledPulses
@@ -2889,6 +2905,11 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
   const double dtmax = config.GetValue("pulse_study.position_dt_max_ns", config.GetValue("pulse_study.fit_signal_max", -20.));
   const double minimum = config.GetValue("pulse_study.position_min_m", -1.6), maximum = config.GetValue("pulse_study.position_max_m", 1.6);
   const double width = config.GetValue("pulse_study.position_bin_width_m", .005);
+  const double ecalMapWidth = config.GetValue("pulse_study.ecal_map_bin_width_m", .0425);
+  const double ecalMapXMin = config.GetValue("pulse_study.ecal_map_x_min_m", -1.53);
+  const double ecalMapXMax = config.GetValue("pulse_study.ecal_map_x_max_m", 1.53);
+  const double ecalMapYMin = config.GetValue("pulse_study.ecal_map_y_min_m", -.68);
+  const double ecalMapYMax = config.GetValue("pulse_study.ecal_map_y_max_m", .68);
   auto validWindow = [](double a, double b) { return std::isfinite(a) && std::isfinite(b) && a < b; };
   if (!validWindow(dtmin, dtmax) || !validWindow(lemin, lemax) ||
       (energyCut && (!std::isfinite(emin) || (energyMaxCut && !validWindow(emin, emax)))) ||
@@ -2898,11 +2919,71 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
       !std::isfinite((maximum-minimum)/width) || std::ceil((maximum-minimum)/width) > std::numeric_limits<int>::max()-2) {
     std::cerr << "[CDet event maps] Invalid cuts or position binning.\n"; return;
   }
+  if (!validWindow(ecalMapXMin, ecalMapXMax) || !validWindow(ecalMapYMin, ecalMapYMax) ||
+      !std::isfinite(ecalMapWidth) || ecalMapWidth <= 0 ||
+      !std::isfinite((ecalMapXMax-ecalMapXMin)/ecalMapWidth) || !std::isfinite((ecalMapYMax-ecalMapYMin)/ecalMapWidth) ||
+      (std::ceil((ecalMapXMax-ecalMapXMin)/ecalMapWidth)+2.)*(std::ceil((ecalMapYMax-ecalMapYMin)/ecalMapWidth)+2.) > std::numeric_limits<int>::max()) {
+    std::cerr << "[CDet event maps] Invalid ECal map bounds or bin width.\n"; return;
+  }
+  // Extend upper display edges to preserve the exact requested bin width.
+  const int ecalMapXBins = std::max(1,int(std::ceil((ecalMapXMax-ecalMapXMin)/ecalMapWidth-1.e-10)));
+  const int ecalMapYBins = std::max(1,int(std::ceil((ecalMapYMax-ecalMapYMin)/ecalMapWidth-1.e-10)));
+  const double ecalMapXUpper = ecalMapXMin+ecalMapXBins*ecalMapWidth;
+  const double ecalMapYUpper = ecalMapYMin+ecalMapYBins*ecalMapWidth;
+  TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
+  const int run = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
+  if (tag.IsNull()) tag = TString::Format("run%d", run);
+  const TString allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (int i = 0; i < tag.Length(); ++i) if (allowed.First(tag[i]) == kNPOS) {
+    std::cerr << "[CDet event maps] Output tag may contain only letters, numbers, underscores and hyphens.\n"; return;
+  }
+  const TString directory = TString::Format("%s/PusleStudy/%s", gSystem->WorkingDirectory(), tag.Data());
+  if (gSystem->AccessPathName(directory)) gSystem->mkdir(directory, true);
+  FileStat_t info;
+  if (gSystem->GetPathInfo(directory, info) != 0 || !R_ISDIR(info.fMode) || gSystem->AccessPathName(directory, kWritePermission)) {
+    std::cerr << "[CDet event maps] Cannot write output directory.\n"; return;
+  }
+  const TString runLabel = PulseStudyRunLabel(config, run);
+  const size_t nECalEvents = vPulseStudyDenominatorECalE.size();
+  if (!pulseStudyDenominatorReady || vPulseStudyDenominatorECalTime.size() != nECalEvents ||
+      vPulseStudyDenominatorECalX.size() != nECalEvents || vPulseStudyDenominatorECalY.size() != nECalEvents) {
+    std::cerr << "[CDet event maps] Reload the main macro to save ECal x/y for ALL ECal-selected events, including zero-CDet events.\n"; return;
+  }
+  auto goodECalValues = [&](double energy, double time) {
+    return std::isfinite(energy) && std::isfinite(time) &&
+        (!energyCut || (energy > emin && (!energyMaxCut || energy < emax))) &&
+        (!timeCut || (time > tmin && time < tmax));
+  };
+  if (!PulseStudyWriteCutReport(directory + "/plotPulseStudyEventMaps_ecal_cuts.txt", "plotPulseStudyEventMaps", configFile, config, {
+      energyCut ? PulseStudyEnergyCutLabel(emin, emax, energyMaxCut) : TString("No secondary ECal energy window."),
+      timeCut ? TString::Format("ECal time: %.12g < t_ECal < %.12g ns", tmin, tmax) : TString("No secondary ECal time window."),
+      "Finite native ECal x/y. One entry per ECal-selected event, including zero accepted CDet pulses.",
+      "No CDet LE, ToT, rx/ry, dt, ellipse, calibration or eligibility requirement on this ECal map."
+    }, {
+      TString::Format("ECal y horizontal: [%.12g,%.12g] m (%d bins); x vertical: [%.12g,%.12g] m (%d bins); exact bin width %.12g m on both axes.", ecalMapYMin, ecalMapYUpper, ecalMapYBins, ecalMapXMin, ecalMapXUpper, ecalMapXBins, ecalMapWidth),
+      "Coordinates are earm.ecal.x/y at ECal, not projected back to CDet. Bin size is a display grid, not a DB block-geometry reconstruction."
+    }, true)) return;
+  delete gROOT->GetListOfCanvases()->FindObject("cPulseECalMap"); delete hPulseECalMap;
+  hPulseECalMap = new TH2D("hPulseECalMap", TString::Format("%s: all ECal-selected events;Native ECal y (m);Native ECal x (m);Events", runLabel.Data()),
+      ecalMapYBins, ecalMapYMin, ecalMapYUpper, ecalMapXBins, ecalMapXMin, ecalMapXUpper);
+  hPulseECalMap->SetDirectory(nullptr); hPulseECalMap->SetStats(false);
+  for (size_t event = 0; event < nECalEvents; ++event) {
+    if (!goodECalValues(vPulseStudyDenominatorECalE[event], vPulseStudyDenominatorECalTime[event])) continue;
+    const double x = vPulseStudyDenominatorECalX[event], y = vPulseStudyDenominatorECalY[event];
+    if (std::isfinite(x) && std::isfinite(y)) hPulseECalMap->Fill(y,x);
+  }
+  TCanvas* ecalCanvas = new TCanvas("cPulseECalMap", hPulseECalMap->GetTitle(), 1200, 742);
+  ecalCanvas->SetCanvasSize(1200, 742); ecalCanvas->SetTopMargin(.10); ecalCanvas->SetLeftMargin(.12); ecalCanvas->SetRightMargin(.15);
+  hPulseECalMap->SetMinimum(0); hPulseECalMap->Draw("COLZ");
+  PulseStudySaveCanvas(ecalCanvas, directory + "/ecal_xy.pdf");
+  std::cout << "[CDet event maps] ECal map: " << hPulseECalMap->GetEntries() << " events (includes zero-CDet events), exact " << ecalMapWidth*100. << " cm bins.\n";
   const size_t nEvents = vPulseID.size();
-  if (!nEvents || eventIndex < -1 || (eventIndex >= 0 && size_t(eventIndex) >= nEvents)) {
+  if (!nEvents) { std::cout << "[CDet event maps] ECal map saved; no saved CDet pulse events to display.\n"; return; }
+  if (eventIndex < -1 || (eventIndex >= 0 && size_t(eventIndex) >= nEvents)) {
     std::cerr << "[CDet event maps] Run the main macro first; choose saved event index 0..N-1, or -1 for automatic selection.\n"; return;
   }
-  if (vECalE.size() != nEvents || vECalAdcTime.size() != nEvents) {
+  if (vECalE.size() != nEvents || vECalAdcTime.size() != nEvents ||
+      vECalX.size() != nEvents || vECalY.size() != nEvents) {
     std::cerr << "[CDet event maps] ECal vectors are not aligned; reload the main macro.\n"; return;
   }
   auto& positions = correctedX ? vPulseXCorr : vPulseX;
@@ -2913,18 +2994,16 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
         std::cerr << "[CDet event maps] Pulse vectors are not event/hit aligned; reload.\n"; return;
       }
   }
-  auto goodECal = [&](size_t event) {
-    const double energy = vECalE[event], time = vECalAdcTime[event];
-    return std::isfinite(energy) && std::isfinite(time) &&
-        (!energyCut || (energy > emin && (!energyMaxCut || energy < emax))) &&
-        (!timeCut || (time > tmin && time < tmax));
-  };
+  auto goodECal = [&](size_t event) { return goodECalValues(vECalE[event], vECalAdcTime[event]); };
   if (eventIndex == -1) {
     for (size_t event = 0; event < nEvents; ++event) if (goodECal(event)) { eventIndex = event; break; }
   }
   if (eventIndex < 0 || !goodECal(size_t(eventIndex))) {
     std::cerr << "[CDet event maps] No ECal-selected event at the requested index (or in the sample).\n"; return;
   }
+  // Use the pulse-event index, not the independent all-ECal denominator index.
+  const double eventECalX = vECalX[eventIndex], eventECalY = vECalY[eventIndex];
+  const bool finiteEventECalPosition = std::isfinite(eventECalX) && std::isfinite(eventECalY);
   // Full DB geometry also supplies bars with no saved hits. Staggered y centers
   // require polygon cells: every cell spans its own bar center +/- 25 cm.
   TString geometryFile = config.GetValue("pulse_study.map_database_file", "../../DB/db_earm.cdet.dat");
@@ -3001,19 +3080,6 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
       low.highX = boundary; high.lowX = boundary;
     }
   }
-  TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
-  const int run = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
-  if (tag.IsNull()) tag = TString::Format("run%d", run);
-  const TString allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
-  for (int i = 0; i < tag.Length(); ++i) if (allowed.First(tag[i]) == kNPOS) {
-    std::cerr << "[CDet event maps] Output tag may contain only letters, numbers, underscores and hyphens.\n"; return;
-  }
-  const TString directory = TString::Format("%s/PusleStudy/%s", gSystem->WorkingDirectory(), tag.Data());
-  if (gSystem->AccessPathName(directory)) gSystem->mkdir(directory, true);
-  FileStat_t info;
-  if (gSystem->GetPathInfo(directory, info) != 0 || !R_ISDIR(info.fMode) || gSystem->AccessPathName(directory, kWritePermission)) {
-    std::cerr << "[CDet event maps] Cannot write output directory.\n"; return;
-  }
   std::vector<TString> cuts = {
       energyCut ? PulseStudyEnergyCutLabel(emin, emax, energyMaxCut) : TString("No secondary ECal energy window."),
       timeCut ? TString::Format("ECal time: %.12g < t_ECal < %.12g ns", tmin, tmax) : TString("No secondary ECal time window."),
@@ -3026,6 +3092,8 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
   if (!PulseStudyWriteCutReport(directory + TString::Format("/plotPulseStudyEventMaps_event%lld_cuts.txt", eventIndex), "plotPulseStudyEventMaps", configFile, config, cuts, {
       TString::Format("Saved-vector index %lld (NOT replay event number); selected using ECal cuts only, without requiring bar 30 or any coincident CDet pulse.", eventIndex),
       TString::Format("ECal energy %.12g GeV; ADC time %.12g ns", vECalE[eventIndex], vECalAdcTime[eventIndex]),
+      finiteEventECalPosition ? TString::Format("Single-event magenta star: native ECal x = %.12g m, y = %.12g m (earm.ecal.x/y; not projected). Display axes expand with 5 cm padding if needed to show the marker; CDet bins and cuts are unchanged.", eventECalX, eventECalY)
+          : TString("Native ECal position unavailable (non-finite x/y); single-event maps show no ECal marker."),
       TString::Format("Horizontal CDet y = DB bar center (not reconstructed hit position along bar); vertical CDet x = %s.", correctedX ? "pulse.x_corr" : "pulse.x"),
       TString::Format("Map display: CDet x [%.12g,%.12g] m, requested bin width %.12g m; CDet y [%.12g,%.12g] m. Polygon cells span each bar DB y center +/- 0.25 m; physical gaps are unfilled.", minimum, maximum, width, yMinimum, yMaximum),
       "Geometry DB: " + geometryFile,
@@ -3042,13 +3110,16 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
   delete gROOT->GetListOfCanvases()->FindObject("cPulseEventBarHits"); delete hPulseEventBarHits;
   const int nCDetXBins = int(std::ceil((maximum-minimum)/width));
   const double xStep = (maximum-minimum)/nCDetXBins;
-  const TString runLabel = PulseStudyRunLabel(config, run);
+  const double eventXMin = finiteEventECalPosition ? std::min(minimum,eventECalX-.05) : minimum;
+  const double eventXMax = finiteEventECalPosition ? std::max(maximum,eventECalX+.05) : maximum;
+  const double eventYMin = finiteEventECalPosition ? std::min(yMinimum,eventECalY-.05) : yMinimum;
+  const double eventYMax = finiteEventECalPosition ? std::max(yMaximum,eventECalY+.05) : yMaximum;
   const char* xLabel = correctedX ? "Aligned CDet x (m)" : "Channel CDet x (m)";
   for (int layer = 0; layer < 2; ++layer) {
     hPulseDetectorMap[layer] = new TH2Poly(TString::Format("hPulseDetectorMapL%d", layer+1),
         TString::Format("%s: L%d pulse occupancy;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), layer+1, xLabel), yMinimum, yMaximum, minimum, maximum);
     hPulseEventMap[layer] = new TH2Poly(TString::Format("hPulseEventMapL%d", layer+1),
-        TString::Format("%s, saved event %lld: L%d coincident pulses;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), eventIndex, layer+1, xLabel), yMinimum, yMaximum, minimum, maximum);
+        TString::Format("%s, saved event %lld: L%d coincident pulses;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), eventIndex, layer+1, xLabel), eventYMin, eventYMax, eventXMin, eventXMax);
     hPulseDetectorMap[layer]->SetDirectory(nullptr); hPulseEventMap[layer]->SetDirectory(nullptr);
     for (int bar = layer*84; bar < (layer+1)*84; ++bar) {
       const auto& b = mapBars[bar];
@@ -3090,7 +3161,7 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
     for (int layer = 0; layer < 2; ++layer) {
       TH2Poly* hist = histograms[layer];
       TCanvas* canvas = new TCanvas(TString::Format(single ? "cPulseEventMapL%d" : "cPulseDetectorMapL%d", layer+1), hist->GetTitle(), 1200, 742);
-      canvas->SetCanvasSize(1200, 742); canvas->SetLeftMargin(.12); canvas->SetRightMargin(.15); canvas->SetTopMargin(.10);
+      canvas->SetCanvasSize(1200, 742); canvas->SetLeftMargin(.12); canvas->SetRightMargin(.15); canvas->SetTopMargin(single ? .17 : .10);
       hist->SetStats(false); hist->SetMinimum(0); hist->SetMaximum(colorMax); hist->Draw("COLZ0"); // Leave empty geometry cells white.
       for (int bar = layer*84; bar < (layer+1)*84; ++bar) {
         const auto& b = mapBars[bar];
@@ -3113,6 +3184,18 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
         }
         if (locations->GetN()) locations->Draw("P SAME");
         else delete locations;
+        TLegend* ecalLegend = new TLegend(.12,.845,.85,.90);
+        ecalLegend->SetName("pulseEventECalLegend"); ecalLegend->SetBit(kCanDelete);
+        ecalLegend->SetBorderSize(0); ecalLegend->SetFillColor(kWhite); ecalLegend->SetTextSize(.027);
+        if (finiteEventECalPosition) {
+          TGraph* ecalPosition = new TGraph(1);
+          ecalPosition->SetName(TString::Format("gPulseEventECalPositionL%d", layer+1));
+          ecalPosition->SetBit(kCanDelete); ecalPosition->SetPoint(0,eventECalY,eventECalX);
+          ecalPosition->SetMarkerStyle(29); ecalPosition->SetMarkerSize(2.2); ecalPosition->SetMarkerColor(kMagenta+2);
+          ecalPosition->Draw("P SAME");
+          ecalLegend->AddEntry(ecalPosition,TString::Format("Native ECal (unprojected): x = %.3f m, y = %.3f m",eventECalX,eventECalY),"p");
+        } else ecalLegend->AddEntry((TObject*)nullptr,"Native ECal position unavailable (non-finite x/y)","");
+        ecalLegend->Draw();
       }
       PulseStudySaveCanvas(canvas, directory + (single ? TString::Format("/event%lld_layer%d_xy.pdf", eventIndex, layer+1) : TString::Format("/detector_layer%d_xy.pdf", layer+1)));
     }
@@ -3128,7 +3211,7 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
   label.DrawLatex(.25, .84, "Layer 1 (0-83)"); label.DrawLatex(.65, .84, "Layer 2 (84-167)");
   PulseStudySaveCanvas(counts, directory + TString::Format("/event%lld_hits_vs_bar.pdf", eventIndex));
   std::cout << "[CDet event maps] Saved event index " << eventIndex << " (not replay event number): " << hPulseEventBarHits->GetEntries()
-            << " coincident pulses. Five canvases remain open. No secondary rx/ellipse cuts; loading cuts remain.\n  PDF output: " << directory << '\n';
+            << " coincident pulses. Six canvases remain open (including the all-ECal map). No secondary rx/ellipse cuts; loading cuts remain.\n  PDF output: " << directory << '\n';
 }
 
 // calibrationFile must contain the pixel constants used to replay the saved events.
