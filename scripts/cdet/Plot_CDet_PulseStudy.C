@@ -2486,6 +2486,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         "Finite plotted coordinates required per histogram; each accepted pulse counted once per applicable scope.",
         "ECal projected coordinate = native ECal coordinate * pixel z / ECal z. Native ECal coordinates are unprojected.",
         "Raw/corrected CDet x vs projected ECal x overlays: ProfileX mean CDet x in each ECal-x bin, with errors on the mean, computed from regular TH2 bins (bin-center approximation; excludes under/overflow).",
+        "Full-detector projected-x profiles also have a weighted linear fit: mean CDet x = intercept + slope * projected ECal x. Use slices with at least two entries in at least two distinct CDet-x bins, finite means, and positive finite errors on the mean; at least three fit bins are required. Fit/draw only between the first and last usable bin centers. Parameter uncertainties and chi2/ndf are shown on the plots. The rx selection can influence this fitted trend.",
         "CDet y is the DB channel center; x-minus-projection spectra use direct subtraction, without an extra residual offset.",
         "1D channel CDet x: one entry per accepted pulse. 1D native ECal x: one entry per saved event with an accepted pulse, not weighted by pulse multiplicity.",
         "The additional channel-CDet-x / native-ECal-x overlay scales the red ECal curve by (maximum CDet bin count)/(maximum ECal bin count), using regular bins only. The legend reports the factor; empty peaks use factor 1. Only the drawn ECal copy is scaled; the individual histograms retain their original pulse/event counts.",
@@ -2722,6 +2723,12 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     }
   }
 
+  std::ofstream profileFitReport((outputDirectory + "/plotPulseStudyPositionCorrelations_cuts.txt").Data(), std::ios::app);
+  if (!profileFitReport) {
+    std::cerr << "[CDet position correlations] Cannot append profile fit results to the cut report.\n";
+    return;
+  }
+  profileFitReport << "\nFULL-DETECTOR PROJECTED-X PROFILE FITS\n" << std::setprecision(12);
   // Six interactive canvases for the control bar, detector, and each layer.
   // The detector population includes each accepted pulse once, independent of bar choices.
   for (int selected = 0; selected < 4; ++selected) {
@@ -2740,7 +2747,8 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         TH2D* histogram = hPulsePositionCorrelation[selected][projected][coordinate];
         TCanvas* canvas = new TCanvas(TString::Format("cPulseCorrelation%s%s%s", roles[selected], ecalNames[projected], coordinateNames[coordinate]), histogram->GetTitle(), 1200, 742);
         canvas->SetCanvasSize(1200, 742);
-        canvas->SetTopMargin(0.10);
+        const bool fitDetectorProfile = selected == 1 && projected && coordinate < 2;
+        canvas->SetTopMargin(fitDetectorProfile ? 0.23 : 0.10);
         canvas->SetLeftMargin(0.12);
         canvas->SetRightMargin(0.15);
         histogram->SetMinimum(0.0);
@@ -2758,7 +2766,56 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
           profile->SetMarkerSize(0.65);
           profile->SetMarkerColor(kBlack);
           profile->SetLineColor(kBlack);
-          profile->DrawCopy("E1 SAME"); // Canvas owns the copy, including on repeated calls.
+          if (fitDetectorProfile) {
+            // Fit the profile means with their standard errors. No x error:
+            // the horizontal coordinate is the fixed profile-bin center.
+            TGraphErrors fitPoints;
+            for (int bin = 1; bin <= profile->GetNbinsX(); ++bin) {
+              const double mean = profile->GetBinContent(bin), error = profile->GetBinError(bin);
+              if (profile->GetBinEntries(bin) < 2. || !std::isfinite(mean) || !std::isfinite(error) || error <= 0.) continue;
+              // A zero-spread slice can acquire a tiny error from roundoff.
+              // Require resolved spread so it cannot dominate the weighted fit.
+              int occupiedYBins = 0;
+              for (int ybin = 1; ybin <= histogram->GetNbinsY(); ++ybin)
+                if (histogram->GetBinContent(bin,ybin) > 0. && ++occupiedYBins == 2) break;
+              if (occupiedYBins < 2) continue;
+              const int point = fitPoints.GetN();
+              fitPoints.SetPoint(point,profile->GetBinCenter(bin),mean);
+              fitPoints.SetPointError(point,0.,error);
+            }
+            TPaveText* fitLabel = new TPaveText(.12,.785,.85,.90,"NDC");
+            fitLabel->SetName("pulsePositionProfileFit"); fitLabel->SetBit(kCanDelete);
+            fitLabel->SetFillColor(kWhite); fitLabel->SetBorderSize(0);
+            fitLabel->SetTextFont(42); fitLabel->SetTextSize(.025); fitLabel->SetTextAlign(12);
+            fitLabel->AddText("Linear profile fit: #LT x_{CDet} #GT = a + b x_{ECal,proj}");
+            profileFitReport << coordinateNames[coordinate] << ": " << fitPoints.GetN() << " usable bins\n";
+            if (fitPoints.GetN() >= 3) {
+              const double fitMin = fitPoints.GetPointX(0), fitMax = fitPoints.GetPointX(fitPoints.GetN()-1);
+              TF1 fit(TString::Format("%s_linear",histogram->GetName()),"pol1",fitMin,fitMax);
+              fit.AddToGlobalList(false);
+              TFitResultPtr result = fitPoints.Fit(&fit,"QRSN");
+              const bool goodFit = int(result) == 0 && result.Get() && result->IsValid() && result->CovMatrixStatus() >= 2 &&
+                  fit.GetNDF() > 0 && std::isfinite(fit.GetChisquare()) &&
+                  std::isfinite(fit.GetParameter(0)) && std::isfinite(fit.GetParameter(1)) &&
+                  std::isfinite(fit.GetParError(0)) && std::isfinite(fit.GetParError(1));
+              if (goodFit) {
+                fit.SetLineColor(kMagenta+2); fit.SetLineWidth(3); fit.DrawCopy("SAME");
+                fitLabel->AddText(TString::Format("a = %.4g #pm %.2g m; b = %.4g #pm %.2g",fit.GetParameter(0),fit.GetParError(0),fit.GetParameter(1),fit.GetParError(1)));
+                fitLabel->AddText(TString::Format("#chi^{2}/ndf = %.3g / %d = %.3g; %d bins",fit.GetChisquare(),fit.GetNDF(),fit.GetChisquare()/fit.GetNDF(),fitPoints.GetN()));
+                profileFitReport << "  x range [" << fitMin << ", " << fitMax << "] m; intercept = " << fit.GetParameter(0)
+                    << " +/- " << fit.GetParError(0) << " m; slope = " << fit.GetParameter(1) << " +/- " << fit.GetParError(1)
+                    << "; chi2 = " << fit.GetChisquare() << "; ndf = " << fit.GetNDF() << "; chi2/ndf = " << fit.GetChisquare()/fit.GetNDF() << '\n';
+              } else {
+                fitLabel->AddText("Fit unavailable: fit or uncertainty estimate failed.");
+                profileFitReport << "  Fit unavailable; status " << int(result) << '\n';
+              }
+            } else {
+              fitLabel->AddText("Fit unavailable: need at least 3 usable profile bins.");
+              profileFitReport << "  Fit unavailable: fewer than three usable bins.\n";
+            }
+            fitLabel->Draw();
+          }
+          profile->DrawCopy("E1 SAME"); // Keep points above the fit; canvas owns the copy on repeated calls.
           delete profile;
         }
         canvas->Modified();
