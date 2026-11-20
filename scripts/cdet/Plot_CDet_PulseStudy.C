@@ -35,6 +35,7 @@
 #include <TGraphErrors.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TH2Poly.h>
 #include <TLatex.h>
 #include <TLegend.h>
 #include <TList.h>
@@ -56,6 +57,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -165,8 +167,8 @@ TH1D* hPulseBar30Multiplicity = nullptr; // all saved bar-30 pulses; one entry p
 TH1D* hPulsePositionCDetX = nullptr;
 TH1D* hPulsePositionECalX = nullptr;
 // Detector maps and one saved event, split by layer.
-TH2D* hPulseDetectorMap[2] = {};
-TH2D* hPulseEventMap[2] = {};
+TH2Poly* hPulseDetectorMap[2] = {};
+TH2Poly* hPulseEventMap[2] = {};
 TH1D* hPulseEventBarHits = nullptr;
 
 // Multiplicity is counted per event in the background routine's selected bar.
@@ -547,11 +549,13 @@ void Plot_CDet_PulseStudy(
 
   const double ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
   const double ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
-  const double ECalBinWidth = 0.5; // Same default as the background routine, ns.
+  const double ECalBinWidth = config.GetValue("pulse_study.ecal_time_bin_width_ns", 1.0);
   if (!std::isfinite(ECalDisplayMin) || !std::isfinite(ECalDisplayMax) ||
       ECalDisplayMin >= ECalDisplayMax ||
-      (ECalDisplayMax - ECalDisplayMin) / ECalBinWidth > std::numeric_limits<int>::max() - 2) {
-    std::cerr << "[CDet pulse study] Invalid ECal time display bounds.\n";
+      !std::isfinite(ECalBinWidth) || ECalBinWidth <= 0.0 ||
+      !std::isfinite((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) ||
+      std::ceil((ECalDisplayMax - ECalDisplayMin) / ECalBinWidth) > std::numeric_limits<int>::max() - 2) {
+    std::cerr << "[CDet pulse study] Invalid ECal time display bounds or bin width.\n";
     return;
   }
   pulseStudyLoadedPlotCuts = {true, ECalMinE, applyECalEnergyMax ? ECalMaxE : NAN, ECalMinT, ECalMaxT, LeMin, LeMax, TotMin, applyToTMax ? TotMax : NAN, RxMax, RyMax};
@@ -1545,7 +1549,7 @@ void plotPulseStudyBars(const char* configFile = "CDet_run6077_pulse_pixel_timin
   if (std::isnan(TotDisplayMax)) TotDisplayMax = config.GetValue("display.tot_max", 60.0);
   const double ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
   const double ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
-  const double ECalBinWidth = config.GetValue("pulse_study.ecal_time_bin_width_ns", 0.5);
+  const double ECalBinWidth = config.GetValue("pulse_study.ecal_time_bin_width_ns", 1.0);
   if (!std::isfinite(ECalDisplayMin) || !std::isfinite(ECalDisplayMax) || ECalDisplayMin >= ECalDisplayMax ||
       !std::isfinite(ECalBinWidth) || ECalBinWidth <= 0.0 ||
       !std::isfinite((ECalDisplayMax-ECalDisplayMin)/ECalBinWidth) ||
@@ -2473,6 +2477,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
         "Raw/corrected CDet x vs projected ECal x overlays: ProfileX mean CDet x in each ECal-x bin, with errors on the mean, computed from regular TH2 bins (bin-center approximation; excludes under/overflow).",
         "CDet y is the DB channel center; x-minus-projection spectra use direct subtraction, without an extra residual offset.",
         "1D channel CDet x: one entry per accepted pulse. 1D native ECal x: one entry per saved event with an accepted pulse, not weighted by pulse multiplicity.",
+        "The additional channel-CDet-x / native-ECal-x overlay retains these counts without normalization; blue counts pulses, red counts events.",
         "Y timing correction OFF. New layer plots are same-event pulse combinations, not replay pair-branch matches.",
         TString::Format("Layer-combination gate: at least one L1 bar-30 pulse passing secondary ECal, raw-LE, ToT and rx/ellipse cuts AND %.12g <= stored dt <= %.12g ns. This gate is ALWAYS applied, regardless of position_apply_dt_cut.", DtCutMin, DtCutMax),
         "Combine EVERY qualifying bar-30 pulse with EVERY saved L2 pulse in the same event (IDs 1344..2687), including L2 pulses outside the dt peak or failing secondary pulse cuts. L2 has loading cuts only; event ECal cuts still apply.",
@@ -2555,6 +2560,7 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
 
   delete gROOT->GetListOfCanvases()->FindObject("cPulsePositionCDetX");
   delete gROOT->GetListOfCanvases()->FindObject("cPulsePositionECalX");
+  delete gROOT->GetListOfCanvases()->FindObject("cPulsePositionNativeXOverlay");
   delete hPulsePositionCDetX;
   delete hPulsePositionECalX;
   hPulsePositionCDetX = new TH1D("hPulsePositionCDetX",
@@ -2838,8 +2844,21 @@ void plotPulseStudyPositionCorrelations(const char* configFile = "CDet_run6077_p
     canvas->Update();
     PulseStudySaveCanvas(canvas, outputDirectory + "/" + positionFiles[position]);
   }
+  TCanvas* xOverlay = new TCanvas("cPulsePositionNativeXOverlay", "Channel CDet x and native ECal x", 1200, 742);
+  xOverlay->SetCanvasSize(1200, 742); xOverlay->SetTopMargin(.10); xOverlay->SetLeftMargin(.12); xOverlay->SetRightMargin(.05);
+  TH1* cdetX = hPulsePositionCDetX->DrawCopy("HIST", "_overlay");
+  TH1* ecalX = hPulsePositionECalX->DrawCopy("HIST SAME", "_overlay");
+  cdetX->SetTitle(TString::Format("%s: channel CDet x and native ECal x;Position x (m);Counts (CDet pulses / ECal events)", PulseStudyRunLabel(config, RunNumber).Data()));
+  cdetX->SetMaximum(1.45*std::max(1.,std::max(hPulsePositionCDetX->GetBinContent(hPulsePositionCDetX->GetMaximumBin()), hPulsePositionECalX->GetBinContent(hPulsePositionECalX->GetMaximumBin()))));
+  cdetX->SetLineColor(kBlue+1); ecalX->SetLineColor(kRed+1);
+  TLegend* xLegend = new TLegend(.55,.76,.94,.88);
+  xLegend->SetBit(kCanDelete); xLegend->SetBorderSize(0); xLegend->SetFillColor(kWhite);
+  xLegend->AddEntry(cdetX,"Channel CDet x (per pulse)","l");
+  xLegend->AddEntry(ecalX,"Native ECal x (per event)","l"); xLegend->Draw();
+  PulseStudySaveCanvas(xOverlay, outputDirectory + "/detector_cdet_x_and_ecal_x_native.pdf");
+
   std::cout << "[CDet position correlations] Selected " << filledPulses
-            << " detector pulses; thirty-seven canvases remain open (including 4 layer-combination plots and bar-30 multiplicity). ECal correlations use ECal horizontally; layer plots use x1 horizontally.\n"
+            << " detector pulses; thirty-eight canvases remain open (including the native-x overlay, 4 layer-combination plots and bar-30 multiplicity). ECal correlations use ECal horizontally; layer plots use x1 horizontally.\n"
             << "  Bar-30 signal events: " << bar30SignalEvents << "; channel/aligned layer combinations: "
             << hPulseLayerX2VsX1[0]->GetEntries() << "/" << hPulseLayerX2VsX1[1]->GetEntries() << '\n'
             << "  Multiplicity includes " << bar30Multiplicities.size() << " nonempty bar-30 events before secondary pulse cuts. PDF output: " << outputDirectory << '\n';
@@ -2876,7 +2895,7 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
       (timeCut && !validWindow(tmin, tmax)) ||
       (totCut && (!std::isfinite(totmin) || totmin < 0 || (totMaxCut && !validWindow(totmin, totmax)))) ||
       !validWindow(minimum, maximum) || !std::isfinite(width) || width <= 0 ||
-      !std::isfinite((maximum-minimum)/width) || std::pow(std::ceil((maximum-minimum)/width)+2., 2) > std::numeric_limits<int>::max()) {
+      !std::isfinite((maximum-minimum)/width) || std::ceil((maximum-minimum)/width) > std::numeric_limits<int>::max()-2) {
     std::cerr << "[CDet event maps] Invalid cuts or position binning.\n"; return;
   }
   const size_t nEvents = vPulseID.size();
@@ -2906,6 +2925,82 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
   if (eventIndex < 0 || !goodECal(size_t(eventIndex))) {
     std::cerr << "[CDet event maps] No ECal-selected event at the requested index (or in the sample).\n"; return;
   }
+  // Full DB geometry also supplies bars with no saved hits. Staggered y centers
+  // require polygon cells: every cell spans its own bar center +/- 25 cm.
+  TString geometryFile = config.GetValue("pulse_study.map_database_file", "../../DB/db_earm.cdet.dat");
+  gSystem->ExpandPathName(geometryFile);
+  if (!geometryFile.BeginsWith("/")) geometryFile = TString(gSystem->DirName(configFile)) + "/" + geometryFile;
+  std::ifstream geometry(geometryFile.Data());
+  if (!geometry) { std::cerr << "[CDet event maps] Cannot read geometry DB: " << geometryFile << '\n'; return; }
+  std::map<std::string, std::vector<double>> db = {{"xpos", {}}, {"ypos", {}},
+      {"selection.x_scale_l1", {}}, {"selection.x_scale_l2", {}},
+      {"selection.x_alignment_l1", {}}, {"selection.x_alignment_l2", {}}};
+  std::map<std::string, int> blocks;
+  std::string line, reading;
+  while (std::getline(geometry, line)) {
+    line = line.substr(0, line.find('#'));
+    const auto equals = line.find('=');
+    if (equals != std::string::npos) {
+      std::istringstream keyInput(line.substr(0, equals));
+      std::string key; keyInput >> key;
+      reading.clear();
+      const std::string prefix = "earm.cdet.";
+      if (key.compare(0, prefix.size(), prefix) == 0 && db.count(key.substr(prefix.size()))) {
+        reading = key.substr(prefix.size()); ++blocks[reading];
+      }
+      line = line.substr(equals+1);
+    }
+    if (line.find('[') != std::string::npos) reading.clear();
+    if (reading.empty()) continue;
+    std::istringstream numbers(line);
+    double value; while (numbers >> value) db[reading].push_back(value);
+  }
+  for (const auto& item : db) {
+    const bool positions = item.first == "xpos" || item.first == "ypos";
+    if (!positions && !correctedX) continue;
+    if (blocks[item.first] != 1 || (positions ? item.second.size() < size_t(numBars*pixelsPerBar) : item.second.size() != 1)) {
+      std::cerr << "[CDet event maps] Missing/ambiguous geometry DB key: " << item.first << '\n'; return;
+    }
+  }
+  struct MapBar { double minX, maxX, lowX, highX, y; };
+  std::vector<MapBar> mapBars(numBars);
+  double yMinimum = std::numeric_limits<double>::infinity(), yMaximum = -yMinimum;
+  for (int bar = 0; bar < numBars; ++bar) {
+    MapBar& b = mapBars[bar];
+    b.minX = std::numeric_limits<double>::infinity(); b.maxX = -b.minX; b.y = NAN;
+    const int layer = bar / 84;
+    const double scale = correctedX ? db[layer ? "selection.x_scale_l2" : "selection.x_scale_l1"][0] : 1.;
+    const double alignment = correctedX ? db[layer ? "selection.x_alignment_l2" : "selection.x_alignment_l1"][0] : 0.;
+    if (!std::isfinite(scale) || scale <= 0 || !std::isfinite(alignment)) {
+      std::cerr << "[CDet event maps] Invalid x alignment in geometry DB.\n"; return;
+    }
+    int active = 0;
+    for (int id = bar*pixelsPerBar; id < (bar+1)*pixelsPerBar; ++id) {
+      const double rawX = db["xpos"][id], y = db["ypos"][id];
+      if (!std::isfinite(rawX) || !std::isfinite(y) || std::abs(rawX) >= 900. || std::abs(y) >= 900.) continue;
+      if (std::isfinite(b.y) && std::abs(b.y-y) > 1.e-9) {
+        std::cerr << "[CDet event maps] Inconsistent DB y centers within bar " << bar << '\n'; return;
+      }
+      const double x = scale*rawX-alignment;
+      b.minX = std::min(b.minX,x); b.maxX = std::max(b.maxX,x); b.y = y; ++active;
+    }
+    if (active < 2 || b.maxX <= b.minX) { std::cerr << "[CDet event maps] Missing geometry for bar " << bar << '\n'; return; }
+    const double halfPitch = .5*(b.maxX-b.minX)/(active-1);
+    b.lowX = b.minX-halfPitch; b.highX = b.maxX+halfPitch;
+    yMinimum = std::min(yMinimum,b.y-.25); yMaximum = std::max(yMaximum,b.y+.25);
+  }
+  // Neighboring bars on the same side meet halfway between outer pixel centers.
+  // This avoids overlapping polygon cells at a rounded DB coordinate boundary.
+  for (int side = 0; side < 4; ++side) {
+    std::vector<int> order;
+    for (int bar = side*42; bar < (side+1)*42; ++bar) order.push_back(bar);
+    std::sort(order.begin(),order.end(),[&](int a,int b){return mapBars[a].minX < mapBars[b].minX;});
+    for (size_t i = 1; i < order.size(); ++i) {
+      MapBar& low = mapBars[order[i-1]]; MapBar& high = mapBars[order[i]];
+      const double boundary = .5*(low.maxX+high.minX);
+      low.highX = boundary; high.lowX = boundary;
+    }
+  }
   TString tag = outputTag ? outputTag : config.GetValue("pulse_study.output_tag", "");
   const int run = pulseStudyRunNumber > 0 ? pulseStudyRunNumber : config.GetValue("analysis.run_number", 0);
   if (tag.IsNull()) tag = TString::Format("run%d", run);
@@ -2932,6 +3027,9 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
       TString::Format("Saved-vector index %lld (NOT replay event number); selected using ECal cuts only, without requiring bar 30 or any coincident CDet pulse.", eventIndex),
       TString::Format("ECal energy %.12g GeV; ADC time %.12g ns", vECalE[eventIndex], vECalAdcTime[eventIndex]),
       TString::Format("Horizontal CDet y = DB bar center (not reconstructed hit position along bar); vertical CDet x = %s.", correctedX ? "pulse.x_corr" : "pulse.x"),
+      TString::Format("Map display: CDet x [%.12g,%.12g] m, requested bin width %.12g m; CDet y [%.12g,%.12g] m. Polygon cells span each bar DB y center +/- 0.25 m; physical gaps are unfilled.", minimum, maximum, width, yMinimum, yMaximum),
+      "Geometry DB: " + geometryFile,
+      "Dashed guides lie at each bar midpoint in x (midpoint of its outer valid pixel centers), extending only over that bar y center +/- 0.25 m. Aligned-x mode also aligns the geometry guides.",
       "One count per accepted pulse, not unique pixel. Bar counts include every bar, including zero-hit bars; coordinates do not affect counts.",
       "Both layers are displayed separately. Position maps require finite coordinates; overflow remains outside displayed axes. Counts use no display-bound cut."
   })) return;
@@ -2942,15 +3040,29 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
     delete hPulseDetectorMap[layer]; delete hPulseEventMap[layer];
   }
   delete gROOT->GetListOfCanvases()->FindObject("cPulseEventBarHits"); delete hPulseEventBarHits;
-  const int bins = int(std::ceil((maximum-minimum)/width));
+  const int nCDetXBins = int(std::ceil((maximum-minimum)/width));
+  const double xStep = (maximum-minimum)/nCDetXBins;
   const TString runLabel = PulseStudyRunLabel(config, run);
   const char* xLabel = correctedX ? "Aligned CDet x (m)" : "Channel CDet x (m)";
   for (int layer = 0; layer < 2; ++layer) {
-    hPulseDetectorMap[layer] = new TH2D(TString::Format("hPulseDetectorMapL%d", layer+1),
-        TString::Format("%s: L%d pulse occupancy;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), layer+1, xLabel), bins, minimum, maximum, bins, minimum, maximum);
-    hPulseEventMap[layer] = new TH2D(TString::Format("hPulseEventMapL%d", layer+1),
-        TString::Format("%s, saved event %lld: L%d coincident pulses;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), eventIndex, layer+1, xLabel), bins, minimum, maximum, bins, minimum, maximum);
+    hPulseDetectorMap[layer] = new TH2Poly(TString::Format("hPulseDetectorMapL%d", layer+1),
+        TString::Format("%s: L%d pulse occupancy;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), layer+1, xLabel), yMinimum, yMaximum, minimum, maximum);
+    hPulseEventMap[layer] = new TH2Poly(TString::Format("hPulseEventMapL%d", layer+1),
+        TString::Format("%s, saved event %lld: L%d coincident pulses;CDet y, DB bar center (m);%s;Pulses", runLabel.Data(), eventIndex, layer+1, xLabel), yMinimum, yMaximum, minimum, maximum);
     hPulseDetectorMap[layer]->SetDirectory(nullptr); hPulseEventMap[layer]->SetDirectory(nullptr);
+    for (int bar = layer*84; bar < (layer+1)*84; ++bar) {
+      const auto& b = mapBars[bar];
+      const double low = std::max(minimum,b.lowX), high = std::min(maximum,b.highX);
+      if (low >= high) continue;
+      const int first = std::max(0,int(std::floor((low-minimum)/xStep)));
+      const int last = std::min(nCDetXBins-1,int(std::ceil((high-minimum)/xStep))-1);
+      for (int ix = first; ix <= last; ++ix) {
+        const double x1 = std::max(low,minimum+ix*xStep), x2 = std::min(high,minimum+(ix+1)*xStep);
+        if (x1 >= x2) continue;
+        hPulseDetectorMap[layer]->AddBin(b.y-.25,x1,b.y+.25,x2);
+        hPulseEventMap[layer]->AddBin(b.y-.25,x1,b.y+.25,x2);
+      }
+    }
   }
   hPulseEventBarHits = new TH1D("hPulseEventBarHits", TString::Format("%s, saved event %lld: coincident pulses;CDet bar number;Pulses in event", runLabel.Data(), eventIndex), numBars, -.5, numBars-.5);
   hPulseEventBarHits->SetDirectory(nullptr);
@@ -2973,23 +3085,32 @@ void plotPulseStudyEventMaps(const char* configFile = "CDet_run6077_pulse_pixel_
     }
   }
   for (int single = 0; single < 2; ++single) {
-    TH2D** histograms = single ? hPulseEventMap : hPulseDetectorMap;
+    TH2Poly** histograms = single ? hPulseEventMap : hPulseDetectorMap;
     const double colorMax = std::max(1., std::max(histograms[0]->GetMaximum(), histograms[1]->GetMaximum()));
     for (int layer = 0; layer < 2; ++layer) {
-      TH2D* hist = histograms[layer];
+      TH2Poly* hist = histograms[layer];
       TCanvas* canvas = new TCanvas(TString::Format(single ? "cPulseEventMapL%d" : "cPulseDetectorMapL%d", layer+1), hist->GetTitle(), 1200, 742);
       canvas->SetCanvasSize(1200, 742); canvas->SetLeftMargin(.12); canvas->SetRightMargin(.15); canvas->SetTopMargin(.10);
-      hist->SetStats(false); hist->SetMinimum(0); hist->SetMaximum(colorMax); hist->Draw("COLZ");
+      hist->SetStats(false); hist->SetMinimum(0); hist->SetMaximum(colorMax); hist->Draw("COLZ0"); // Leave empty geometry cells white.
+      for (int bar = layer*84; bar < (layer+1)*84; ++bar) {
+        const auto& b = mapBars[bar];
+        const double x = .5*(b.minX+b.maxX);
+        if (x < minimum || x > maximum) continue;
+        TLine* guide = new TLine(b.y-.25,x,b.y+.25,x);
+        guide->SetUniqueID(bar+1); guide->SetBit(kCanDelete);
+        guide->SetLineStyle(2); guide->SetLineColor(kGray+2); guide->SetLineWidth(1); guide->Draw();
+      }
       if (single) {
         // Outline occupied bins so individual event hits remain visible at detector scale.
         TGraph* locations = new TGraph();
         locations->SetName(TString::Format("gPulseEventLocationsL%d", layer+1));
         locations->SetBit(kCanDelete); locations->SetMarkerStyle(24);
         locations->SetMarkerSize(.9); locations->SetMarkerColor(kBlack);
-        for (int ix = 1; ix <= bins; ++ix)
-          for (int iy = 1; iy <= bins; ++iy)
-            if (hist->GetBinContent(ix, iy) > 0)
-              locations->SetPoint(locations->GetN(), hist->GetXaxis()->GetBinCenter(ix), hist->GetYaxis()->GetBinCenter(iy));
+        for (auto* object : *hist->GetBins()) {
+          auto* bin = static_cast<TH2PolyBin*>(object);
+          if (hist->GetBinContent(bin->GetBinNumber()) > 0)
+            locations->SetPoint(locations->GetN(), .5*(bin->GetXMin()+bin->GetXMax()), .5*(bin->GetYMin()+bin->GetYMax()));
+        }
         if (locations->GetN()) locations->Draw("P SAME");
         else delete locations;
       }
@@ -3440,7 +3561,7 @@ void extractBarOffsets(bool viewOnly = true, int myBar = 0, const std::vector<in
 void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel_timing.conf",
                              const char* outputTag = nullptr, int studyBar = -1, int controlBar = -1, int controlPixel = -1,
                              double BinWidth = NAN, double DtMin = NAN, double DtMax = NAN,
-                             double ECalBinWidth = 0.5, double ECalDisplayMin = NAN, double ECalDisplayMax = NAN,
+                             double ECalBinWidth = NAN, double ECalDisplayMin = NAN, double ECalDisplayMax = NAN,
                              double PositionBinWidth = NAN, double PositionMin = NAN, double PositionMax = NAN,
                              double RxBinWidth = 0.002, double RxMin = NAN, double RxMax = NAN)
 {
@@ -3457,6 +3578,7 @@ void plotPulseStudyBackground(const char* configFile = "CDet_run6077_pulse_pixel
   if (std::isnan(DtMin)) DtMin = config.GetValue("display.ecal_cdet_dt_min", -90.0);
   if (std::isnan(DtMax)) DtMax = config.GetValue("display.ecal_cdet_dt_max", 0.0);
 
+  if (std::isnan(ECalBinWidth)) ECalBinWidth = config.GetValue("pulse_study.ecal_time_bin_width_ns", 1.0);
   if (std::isnan(ECalDisplayMin)) ECalDisplayMin = config.GetValue("display.ecal_time_min", -15.0);
   if (std::isnan(ECalDisplayMax)) ECalDisplayMax = config.GetValue("display.ecal_time_max", 15.0);
 
